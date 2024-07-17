@@ -1,0 +1,4 @@
+--pos1 = pos(0, 0, "lobby")
+--print(pos1:is_loaded())
+--pos1:load()
+--print(pos1:is_loaded())
