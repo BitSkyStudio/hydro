@@ -1,10 +1,13 @@
 use immutable_string::ImmutableString;
 use mlua::{Error, FromLua, Lua, UserData, UserDataFields, UserDataMethods};
-use crate::{Chunk, ChunkTileLayer, ServerPtr, World};
+use crate::{Chunk, ChunkTileLayer, Server, ServerPtr, World};
 use crate::util::{CHUNK_SIZE, TilePosition};
 
 pub fn init_lua_functions(lua: &Lua){
     let globals = lua.globals();
+
+    globals.set("tps", Server::TPS).unwrap();
+    globals.set("deltatime", 1./Server::TPS as f64).unwrap();
 
     globals.set("pos", lua.create_function(|_, (x,y,world):(f64,f64,String)|{
         Ok(Position{
