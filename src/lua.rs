@@ -44,7 +44,7 @@ impl UserData for LuaTileSet{
                 }
             };
             let tileset = server.tile_sets.get(&tile_map.tileset).ok_or(Error::runtime("tileset doesn't exist"))?;
-            Ok(tileset.tiles.get(&tileset.tile_ids[tile_id as usize]).unwrap().clone())
+            Ok(tileset.tiles.get(&tileset.tile_ids[tile_id as usize]).unwrap().0.clone())
         });
         methods.add_method("set_at", |lua, tile_map, (pos,id): (Position,String)|{
             let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
@@ -61,7 +61,23 @@ impl UserData for LuaTileSet{
             Ok(())
         });
         methods.add_method("get_data_at", |lua, tile_map, (pos,): (Position,)|{
-            Err::<(), _>(Error::runtime("aaa"))
+            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            let mut worlds = server.worlds.borrow_mut();
+            let world = worlds.get_mut(&pos.world).ok_or(Error::runtime("world not loaded"))?;
+            let (chunk_position, chunk_offset) = pos.align_to_tile().to_chunk_position();
+            let chunk = world.chunks.get_mut(&chunk_position).ok_or(Error::runtime("chunk not loaded"))?;
+            let mut tile_layer = chunk.tile_layers.entry(tile_map.tileset.clone()).or_insert_with(||ChunkTileLayer::new());
+            let tileset = server.tile_sets.get(&tile_map.tileset).ok_or(Error::runtime("tileset not found"))?;
+            let tile_table = tileset.tiles.get(tileset.tile_ids.get(tile_layer.0[chunk_offset.x as usize + (chunk_offset.y as usize * CHUNK_SIZE as usize)] as usize).unwrap()).unwrap().0.clone();
+            Ok(tile_layer.1.entry(chunk_offset).or_insert_with(move || {
+                let table = lua.create_table().unwrap().into_owned();
+                table.to_ref().set_metatable(Some({
+                    let meta = lua.create_table().unwrap();
+                    meta.set("__index", tile_table).unwrap();
+                    meta
+                }));
+                table
+            }).clone())
         });
     }
 }

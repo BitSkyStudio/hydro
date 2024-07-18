@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::{Duration, Instant};
 use immutable_string::ImmutableString;
-use mlua::{Lua};
+use mlua::{Lua, Table};
 use mlua::prelude::{LuaOwnedFunction, LuaOwnedTable};
 use crate::util::{CHUNK_SIZE, ChunkOffset, ChunkPosition};
 
@@ -62,7 +62,19 @@ impl InitEnvironment{
             let init_env = lua.app_data_ref::<InitEnvironment>().ok_or(mlua::Error::runtime("this method can only be used during initialization"))?;
             init_env.event_handlers.borrow_mut().entry(name.into()).or_insert_with(||Vec::new()).push(function);
             Ok(())
-        }).unwrap()).unwrap()
+        }).unwrap()).unwrap();
+        globals.set("register_tileset", lua.create_function(|lua, (name,table): (String,Table)|{
+            let init_env = lua.app_data_ref::<InitEnvironment>().ok_or(mlua::Error::runtime("this method can only be used during initialization"))?;
+            let mut tile_sets = init_env.tile_sets.borrow_mut();
+            let mut tile_set = TileSet::new();
+            let tiles_table: Table = table.get("tiles").unwrap();
+            for tile in tiles_table.sequence_values(){
+                let tile: Table = tile.unwrap();
+                tile_set.register(tile.into_owned()).unwrap();
+            }
+            tile_sets.insert(name.into(), tile_set);
+            Ok(())
+        }).unwrap()).unwrap();
     }
 }
 pub struct Server{
@@ -115,11 +127,11 @@ impl TileSet{
             tile_ids: Vec::new(),
         }
     }
-    pub fn register(&mut self, id: ImmutableString, data: LuaOwnedTable) -> mlua::Result<()>{
+    pub fn register(&mut self, data: LuaOwnedTable) -> mlua::Result<()>{
+        let id: ImmutableString = data.to_ref().get::<&str, String>("id").map_err(|_|mlua::Error::runtime("tile id not specified"))?.into();
         if self.tiles.contains_key(&id){
             return Err(mlua::Error::runtime("registered two tiles with same id"));
         }
-        data.to_ref().set("id", id.to_string()).unwrap();
         let num_id = self.tile_ids.len() as u32;
         self.tile_ids.push(id.clone());
         self.tiles.insert(id, (data, num_id));
