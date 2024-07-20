@@ -23,6 +23,5 @@ register_event("start", function()
 end)
 
 register_event("tick", function()
-    print("Here2")
     --print(ticks_passed..":"..seconds_passed)
 end)

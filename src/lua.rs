@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use immutable_string::ImmutableString;
-use mlua::{Error, FromLua, Lua, OwnedAnyUserData, OwnedTable, UserData, UserDataFields, UserDataMethods, Value};
+use mlua::{AnyUserData, Error, FromLua, Lua, OwnedAnyUserData, OwnedTable, UserData, UserDataFields, UserDataMethods, Value};
 use mlua::prelude::LuaValue;
 use uuid::Uuid;
 use crate::{Chunk, ChunkTileLayer, Server, ServerPtr, World};
@@ -130,7 +130,6 @@ impl Position {
 pub struct Entity{
     type_id: ImmutableString,
     uuid: ImmutableString,
-    table: OwnedTable,
     position: RefCell<Position>,
     removed: AtomicBool,
 }
@@ -141,13 +140,14 @@ impl Entity{
         let metatable = lua.create_table().unwrap().into_owned();
         metatable.to_ref().set("__index", server.entity_registry.entities.get(&id).unwrap().to_ref()).unwrap();
         table.to_ref().set_metatable(Some(metatable.to_ref()));
-        lua.create_userdata(Entity{
+        let user_data = lua.create_userdata(Entity{
             type_id: id,
             uuid: Uuid::new_v4().to_string().into(),
-            table,
             position: RefCell::new(position),
             removed: AtomicBool::new(false),
-        }).unwrap().into_owned()
+        }).unwrap().into_owned();
+        user_data.to_ref().set_nth_user_value(2, table).unwrap();
+        user_data
     }
 }
 impl UserData for Entity{
@@ -166,8 +166,8 @@ impl UserData for Entity{
         fields.add_field_method_get("removed", |lua, entity|{
             Ok(entity.removed.load(Ordering::SeqCst))
         });
-        fields.add_field_method_get("data", |lua, entity|{
-            Ok(entity.table.clone())
+        fields.add_field_function_get("data", |lua, entity: AnyUserData|{
+            entity.nth_user_value::<Value>(2)
         })
     }
     fn add_methods<'lua, M: UserDataMethods<'lua, Self>>(methods: &mut M) {
