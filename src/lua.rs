@@ -1,5 +1,7 @@
+use std::cell::RefCell;
 use immutable_string::ImmutableString;
-use mlua::{Error, FromLua, Lua, UserData, UserDataFields, UserDataMethods};
+use mlua::{Error, FromLua, Lua, OwnedTable, UserData, UserDataFields, UserDataMethods, Value};
+use mlua::prelude::LuaValue;
 use crate::{Chunk, ChunkTileLayer, Server, ServerPtr, World};
 use crate::util::{CHUNK_SIZE, TilePosition};
 
@@ -117,5 +119,29 @@ impl Position {
             x: self.x as i32,
             y: self.y as i32,
         }
+    }
+}
+pub struct Entity{
+    table: OwnedTable,
+    position: RefCell<Position>,
+}
+impl UserData for Entity{
+    fn add_fields<'lua, F: UserDataFields<'lua, Self>>(fields: &mut F) {
+        fields.add_field_method_get("position", |lua, entity|{
+            Ok(entity.position.borrow().clone())
+        });
+        fields.add_field_method_set("position", |lua, entity, position: Position|{
+            //todo: set chunk
+            *entity.position.borrow_mut() = position;
+            Ok(())
+        });
+    }
+    fn add_methods<'lua, M: UserDataMethods<'lua, Self>>(methods: &mut M) {
+        methods.add_meta_method("__index", |lua, entity: &Entity, (key,): (Value,)|{
+            Ok(unsafe{std::mem::transmute::<LuaValue<'_>, LuaValue<'static>>(entity.table.to_ref().get::<Value, Value<>>(key)?)})
+        });
+        methods.add_meta_method("__newindex", |lua, entity: &Entity, (key,value): (Value,Value)|{
+            entity.table.to_ref().set(key, value)
+        });
     }
 }

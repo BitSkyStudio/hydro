@@ -12,7 +12,7 @@ register_event("start", function()
     print(pos1:is_loaded())
     pos1:load()
     print(pos1:is_loaded())
-    tileset("main"):set_at(pos1, "stone")
+    --tileset("main"):set_at(pos1, "stone")
     print(tileset("main"):get_data_at(pos1).aaa)
 end)
 
