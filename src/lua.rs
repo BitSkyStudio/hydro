@@ -1,7 +1,9 @@
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering};
 use immutable_string::ImmutableString;
-use mlua::{Error, FromLua, Lua, OwnedTable, UserData, UserDataFields, UserDataMethods, Value};
+use mlua::{Error, FromLua, Lua, OwnedAnyUserData, OwnedTable, UserData, UserDataFields, UserDataMethods, Value};
 use mlua::prelude::LuaValue;
+use uuid::Uuid;
 use crate::{Chunk, ChunkTileLayer, Server, ServerPtr, World};
 use crate::util::{CHUNK_SIZE, TilePosition};
 
@@ -23,6 +25,10 @@ pub fn init_lua_functions(lua: &Lua){
         Ok(LuaTileSet{
             tileset: tileset.into(),
         })
+    }).unwrap()).unwrap();
+
+    globals.set("spawn", lua.create_function(|lua, (type_id, position): (String, Position)| {
+        Ok(Entity::new(lua, type_id.into(), position))
     }).unwrap()).unwrap();
 }
 
@@ -122,8 +128,27 @@ impl Position {
     }
 }
 pub struct Entity{
+    type_id: ImmutableString,
+    uuid: ImmutableString,
     table: OwnedTable,
     position: RefCell<Position>,
+    removed: AtomicBool,
+}
+impl Entity{
+    pub fn new(lua: &Lua, id: ImmutableString, position: Position) -> OwnedAnyUserData{
+        let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running")).unwrap();
+        let table = lua.create_table().unwrap().into_owned();
+        let metatable = lua.create_table().unwrap().into_owned();
+        metatable.to_ref().set("__index", server.entity_registry.entities.get(&id).unwrap().to_ref()).unwrap();
+        table.to_ref().set_metatable(Some(metatable.to_ref()));
+        lua.create_userdata(Entity{
+            type_id: id,
+            uuid: Uuid::new_v4().to_string().into(),
+            table,
+            position: RefCell::new(position),
+            removed: AtomicBool::new(false),
+        }).unwrap().into_owned()
+    }
 }
 impl UserData for Entity{
     fn add_fields<'lua, F: UserDataFields<'lua, Self>>(fields: &mut F) {
@@ -135,13 +160,20 @@ impl UserData for Entity{
             *entity.position.borrow_mut() = position;
             Ok(())
         });
+        fields.add_field_method_get("id", |lua, entity|{
+            Ok(entity.uuid.to_string())
+        });
+        fields.add_field_method_get("removed", |lua, entity|{
+            Ok(entity.removed.load(Ordering::SeqCst))
+        });
+        fields.add_field_method_get("data", |lua, entity|{
+            Ok(entity.table.clone())
+        })
     }
     fn add_methods<'lua, M: UserDataMethods<'lua, Self>>(methods: &mut M) {
-        methods.add_meta_method("__index", |lua, entity: &Entity, (key,): (Value,)|{
-            Ok(unsafe{std::mem::transmute::<LuaValue<'_>, LuaValue<'static>>(entity.table.to_ref().get::<Value, Value<>>(key)?)})
-        });
-        methods.add_meta_method("__newindex", |lua, entity: &Entity, (key,value): (Value,Value)|{
-            entity.table.to_ref().set(key, value)
+        methods.add_method("remove", |lua, entity, args: ()|{
+            entity.removed.load(Ordering::SeqCst);
+            Ok(())
         });
     }
 }

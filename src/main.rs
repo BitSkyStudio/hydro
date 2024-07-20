@@ -24,6 +24,7 @@ fn main() {
         worlds: RefCell::new(HashMap::new()),
         tile_sets: init_env.tile_sets.into_inner(),
         event_handlers: init_env.event_handlers.into_inner(),
+        entity_registry: init_env.entity_registry.into_inner(),
     });
     server.lua.set_app_data(server.clone());
 
@@ -48,12 +49,14 @@ fn main() {
 }
 pub struct InitEnvironment{
     tile_sets: RefCell<HashMap<ImmutableString, TileSet>>,
+    entity_registry: RefCell<EntityRegistry>,
     event_handlers: RefCell<HashMap<ImmutableString, Vec<LuaOwnedFunction>>>,
 }
 impl InitEnvironment{
     pub fn load_into_lua(lua: &Lua){
         lua.set_app_data(InitEnvironment{
             tile_sets: RefCell::new(HashMap::new()),
+            entity_registry: RefCell::new(EntityRegistry{entities: HashMap::new()}),
             event_handlers: RefCell::new(HashMap::new()),
         });
 
@@ -75,11 +78,18 @@ impl InitEnvironment{
             tile_sets.insert(name.into(), tile_set);
             Ok(())
         }).unwrap()).unwrap();
+        globals.set("register_entity", lua.create_function(|lua, (name,table): (String,Table)|{
+            let init_env = lua.app_data_ref::<InitEnvironment>().ok_or(mlua::Error::runtime("this method can only be used during initialization"))?;
+            let mut entity_registry = init_env.entity_registry.borrow_mut();
+            entity_registry.entities.insert(name.into(), table.into_owned());
+            Ok(())
+        }).unwrap()).unwrap();
     }
 }
 pub struct Server{
     worlds: RefCell<HashMap<ImmutableString, World>>,
     tile_sets: HashMap<ImmutableString, TileSet>,
+    entity_registry: EntityRegistry,
     event_handlers: HashMap<ImmutableString, Vec<LuaOwnedFunction>>,
     lua: Lua,
 }
@@ -137,6 +147,9 @@ impl TileSet{
         self.tiles.insert(id, (data, num_id));
         Ok(())
     }
+}
+pub struct EntityRegistry{
+    entities: HashMap<ImmutableString, LuaOwnedTable>,
 }
 pub struct ChunkTileLayer(Vec<u32>, HashMap<ChunkOffset,LuaOwnedTable>);
 impl ChunkTileLayer{
