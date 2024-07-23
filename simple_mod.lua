@@ -8,7 +8,16 @@ register_tileset("main", {
 })
 
 register_entity("player", {
-    test = "abc"
+    test = "abc",
+    colliders={
+        main={
+            x=0,
+            y=0,
+            w=0.3,
+            h=0.8,
+            mask=1
+        }
+    }
 })
 
 register_event("start", function()
@@ -18,7 +27,7 @@ register_event("start", function()
     print(pos1:is_loaded())
     --tileset("main"):set_at(pos1, "stone")
     print(tileset("main"):get_data_at(pos1).aaa)
-    print(spawn("player", pos1).data.test)
+    print(spawn("player", pos1):get_collider("main"):tiles_overlapping())
     print("here")
 end)
 
