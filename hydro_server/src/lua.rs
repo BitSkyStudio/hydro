@@ -283,7 +283,8 @@ impl UserData for LuaAABB {
                     }
                 }
             }
-            let world = server.worlds.borrow().get(&aabb.world).unwrap();
+            let worlds = server.worlds.borrow();
+            let world = worlds.get(&aabb.world).unwrap();
             for tile in aabb.aabb.tiles_overlapping() {
                 let (chunk_position, chunk_offset) = tile.to_chunk_position();
                 let chunk = world.chunks.get(&chunk_position).unwrap();
@@ -301,7 +302,7 @@ impl UserData for LuaAABB {
                 return Err(Error::runtime("mismatched world"));
             }
             let mut server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
-            let mut collision_time = 1.;
+            let mut collision_time: f64 = 1.;
             for entity in server.entities.borrow().values() {
                 let entity: std::cell::Ref<Entity> = entity.borrow().unwrap();
                 let position = entity.position.borrow().clone();

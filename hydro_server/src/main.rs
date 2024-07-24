@@ -166,7 +166,7 @@ impl TileSet {
         Ok(())
     }
     pub fn by_id(&self, id: u32) -> Option<&TileType> {
-        self.tiles.get(self.tile_ids[id])
+        self.tiles.get(&self.tile_ids[id as usize])
     }
 }
 pub struct EntityType {

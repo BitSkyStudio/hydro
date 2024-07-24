@@ -1,0 +1,9 @@
+[package]
+name = "hydro_server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mlua = { version="0.9.9", features = ["vendored", "lua54", "serialize", "macros", "unstable"] }
+immutable_string = "0.1.1"
+uuid = { version = "1.10.0", features = ["v4"] }
