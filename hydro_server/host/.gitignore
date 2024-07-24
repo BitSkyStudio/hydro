@@ -1,0 +1,1 @@
+hydro_client.wasmcargo build --release --package hydro_client --target wasm32-unknown-unknown
