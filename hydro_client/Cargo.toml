@@ -4,4 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-macroquad = "0.3.5"
+macroquad = { version = "0.3" }
+quad-net = "0.1.1"
+hydro_common = { path = "../hydro_common" }
+bincode = "2.0.0-rc.3"

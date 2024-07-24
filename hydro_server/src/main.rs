@@ -8,7 +8,10 @@ use std::time::{Duration, Instant};
 use immutable_string::ImmutableString;
 use mlua::{Lua, OwnedAnyUserData, Table};
 use mlua::prelude::{LuaOwnedFunction, LuaOwnedTable};
+use tokio::runtime::Runtime;
 use uuid::Uuid;
+use warp::Filter;
+use warp::http::Response;
 
 use crate::lua::Collider;
 use crate::util::{AABB, CHUNK_SIZE, ChunkOffset, ChunkPosition};
@@ -34,6 +37,10 @@ fn main() {
 
     server.call_event("start".into(), server.lua.create_table().unwrap().into_owned()).unwrap();
 
+    std::thread::spawn(|| {
+        Runtime::new().unwrap().block_on(web_server(8080));
+    });
+
     let server_start = Instant::now();
     let mut ticks_passed = 0u32;
     loop {
@@ -50,6 +57,23 @@ fn main() {
         }
         ticks_passed += 1;
     }
+}
+async fn web_server(port: u16) {
+    let websocket = warp::path("ws")
+        .and(warp::ws())
+        .map(|ws: warp::ws::Ws| {
+            ws.on_upgrade(|websocket| user_connected())
+        });
+    let html = warp::path::end().map(|| {
+        Response::builder().body(include_str!("../host/index.html"))
+    });
+    let wasm = warp::path("hydro_client.wasm").and(warp::path::end()).map(|| {
+        Response::builder().header("content-type", "application/wasm").body(include_bytes!("../host/hydro_client.wasm").to_vec())
+    });
+    warp::serve(websocket.or(html).or(wasm)).run(([0, 0, 0, 0], port)).await;
+}
+async fn user_connected() {
+    println!("here connect");
 }
 pub struct InitEnvironment {
     tile_sets: RefCell<HashMap<ImmutableString, TileSet>>,

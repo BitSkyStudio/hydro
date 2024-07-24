@@ -1,7 +1,11 @@
 use macroquad::prelude::*;
+use quad_net::web_socket::WebSocket;
 
 #[macroquad::main("BasicShapes")]
 async fn main() {
+    //let location = web_sys::window().unwrap().document().unwrap().location().unwrap();
+    //let websocket = WebSocket::new(format!("{}://{}/ws", if location.protocol().unwrap() == "https:" { "wss" } else { "ws" }, location.host().unwrap()).as_str()).unwrap();
+    let websocket = WebSocket::connect("ws://localhost:8080/ws").unwrap();
     loop {
         clear_background(RED);
 

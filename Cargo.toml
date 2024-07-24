@@ -2,5 +2,6 @@
 resolver = "2"
 members = [
     "hydro_client",
+    "hydro_common",
     "hydro_server",
 ]
