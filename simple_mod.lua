@@ -1,8 +1,13 @@
 register_tileset("main", {
     tiles = {
         {
+            id = "air",
+            aaa = 5,
+            collision_mask = 0
+        },
+        {
             id = "stone",
-            aaa = 5
+            collision_mask = 1
         }
     }
 })
@@ -29,6 +34,7 @@ register_event("start", function()
     print(tileset("main"):get_data_at(pos1).aaa)
     print(spawn("player", pos1):get_collider("main"):tiles_overlapping())
     print("here")
+    print(type(pos1))
 end)
 
 register_event("tick", function()

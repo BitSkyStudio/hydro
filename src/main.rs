@@ -133,8 +133,13 @@ impl Chunk {
         }
     }
 }
+pub struct TileType {
+    data: LuaOwnedTable,
+    id: u32,
+    collision_mask: u32,
+}
 pub struct TileSet {
-    tiles: HashMap<ImmutableString, (LuaOwnedTable, u32)>,
+    tiles: HashMap<ImmutableString, TileType>,
     tile_ids: Vec<ImmutableString>,
 }
 impl TileSet {
@@ -150,9 +155,18 @@ impl TileSet {
             return Err(mlua::Error::runtime("registered two tiles with same id"));
         }
         let num_id = self.tile_ids.len() as u32;
+        let collision_mask = data.to_ref().get("collision_mask").unwrap();
+        data.to_ref().set("collision_mask", None::<bool>).unwrap();
         self.tile_ids.push(id.clone());
-        self.tiles.insert(id, (data, num_id));
+        self.tiles.insert(id, TileType {
+            id: num_id,
+            data,
+            collision_mask,
+        });
         Ok(())
+    }
+    pub fn by_id(&self, id: u32) -> Option<&TileType> {
+        self.tiles.get(self.tile_ids[id])
     }
 }
 pub struct EntityType {

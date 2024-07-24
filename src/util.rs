@@ -42,7 +42,7 @@ pub struct AABB {
     pub(crate) h: f64,
 }
 impl AABB {
-    pub fn offset(&self, position: Position) -> Self {
+    pub fn offset(&self, position: &Position) -> Self {
         AABB {
             x: self.x + position.x,
             y: self.y + position.y,
@@ -57,7 +57,7 @@ impl AABB {
             world,
         }
     }
-    pub fn collides(&self, other: &AABB) -> bool {
+    pub fn collides(&self, other: AABB) -> bool {
         self.x < other.x + other.w &&
             self.x + self.w > other.x &&
             self.y < other.y + other.h &&
@@ -72,6 +72,16 @@ impl AABB {
             x_end: (self.x + self.w).ceil() as i32,
             y_end: (self.y + self.h).ceil() as i32,
         }
+    }
+    pub fn tiles_overlapping_sweep(&self, target_position: Position) -> Vec<TilePosition> {
+        let x = self.x.floor() as i32;
+        AABBTileIterator {
+            x,
+            y: self.y.floor() as i32,
+            x_start: x,
+            x_end: (self.x + self.w).ceil() as i32,
+            y_end: (self.y + self.h).ceil() as i32,
+        }.collect()
     }
     pub fn sweep(&self, other: &AABB, target_position: Position) -> (AABB, f64) {
         //https://www.gamedev.net/tutorials/programming/general-and-gameplay-programming/swept-aabb-collision-detection-and-response-r3084/

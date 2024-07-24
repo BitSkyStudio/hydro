@@ -60,7 +60,7 @@ impl UserData for LuaTileSet {
                 }
             };
             let tileset = server.tile_sets.get(&tile_map.tileset).ok_or(Error::runtime("tileset doesn't exist"))?;
-            Ok(tileset.tiles.get(&tileset.tile_ids[tile_id as usize]).unwrap().0.clone())
+            Ok(tileset.tiles.get(&tileset.tile_ids[tile_id as usize]).unwrap().data.clone())
         });
         methods.add_method("set_at", |lua, tile_map, (pos, id): (Position, String)| {
             let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
@@ -70,7 +70,7 @@ impl UserData for LuaTileSet {
             let chunk = world.chunks.get_mut(&chunk_position).ok_or(Error::runtime("chunk not loaded"))?;
             let mut tile_layer = chunk.tile_layers.entry(tile_map.tileset.clone()).or_insert_with(|| ChunkTileLayer::new());
             let tileset = server.tile_sets.get(&tile_map.tileset).ok_or(Error::runtime("tileset doesn't exist"))?;
-            tile_layer.0[chunk_offset.x as usize + (chunk_offset.y as usize * CHUNK_SIZE as usize)] = tileset.tiles.get::<ImmutableString>(&id.into()).ok_or(Error::runtime("tile not found in tileset"))?.1;
+            tile_layer.0[chunk_offset.x as usize + (chunk_offset.y as usize * CHUNK_SIZE as usize)] = tileset.tiles.get::<ImmutableString>(&id.into()).ok_or(Error::runtime("tile not found in tileset"))?.id;
             if let Some(tile_data) = tile_layer.1.remove(&chunk_offset) {
                 tile_data.to_ref().set("invalid", true)?;
             }
@@ -84,7 +84,7 @@ impl UserData for LuaTileSet {
             let chunk = world.chunks.get_mut(&chunk_position).ok_or(Error::runtime("chunk not loaded"))?;
             let mut tile_layer = chunk.tile_layers.entry(tile_map.tileset.clone()).or_insert_with(|| ChunkTileLayer::new());
             let tileset = server.tile_sets.get(&tile_map.tileset).ok_or(Error::runtime("tileset not found"))?;
-            let tile_table = tileset.tiles.get(tileset.tile_ids.get(tile_layer.0[chunk_offset.x as usize + (chunk_offset.y as usize * CHUNK_SIZE as usize)] as usize).unwrap()).unwrap().0.clone();
+            let tile_table = tileset.tiles.get(tileset.tile_ids.get(tile_layer.0[chunk_offset.x as usize + (chunk_offset.y as usize * CHUNK_SIZE as usize)] as usize).unwrap()).unwrap().data.clone();
             Ok(tile_layer.1.entry(chunk_offset).or_insert_with(move || {
                 let table = lua.create_table().unwrap().into_owned();
                 table.to_ref().set_metatable(Some({
@@ -223,7 +223,7 @@ impl UserData for Entity {
             let mut server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
             let aabb = server.entity_registry.entities.get(&entity.type_id).unwrap().colliders.get::<ImmutableString>(&name.into()).unwrap().aabb;
             Ok(LuaAABB {
-                aabb: aabb.offset(entity.position.borrow().clone()),
+                aabb: aabb.offset(&*entity.position.borrow()),
                 world: entity.position.borrow().world.clone(),
             })
         });
@@ -266,6 +266,57 @@ impl UserData for LuaAABB {
                 }).unwrap();
             }
             Ok(table)
+        });
+        methods.add_method("test_collisions", |lua: &Lua, aabb, mask: u32| {
+            let mut server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            let mut collided = false;
+            for entity in server.entities.borrow().values() {
+                let entity: std::cell::Ref<Entity> = entity.borrow().unwrap();
+                let position = entity.position.borrow().clone();
+                if position.world != aabb.world {
+                    continue;
+                }
+                let entity_type = server.entity_registry.entities.get(&entity.type_id).unwrap();
+                for collider in entity_type.colliders.values() {
+                    if (collider.mask & mask != 0) && collider.aabb.offset(&position).collides(aabb.aabb) {
+                        collided = true;
+                    }
+                }
+            }
+            let world = server.worlds.borrow().get(&aabb.world).unwrap();
+            for tile in aabb.aabb.tiles_overlapping() {
+                let (chunk_position, chunk_offset) = tile.to_chunk_position();
+                let chunk = world.chunks.get(&chunk_position).unwrap();
+                for (tileset, tile_layer) in chunk.tile_layers.iter() {
+                    let tile_type = server.tile_sets.get(tileset).unwrap().by_id(tile_layer.0[chunk_offset.x as usize + (chunk_offset.y as usize * CHUNK_SIZE as usize)]).unwrap();
+                    if tile_type.collision_mask & mask != 0 {
+                        collided = true;
+                    }
+                }
+            }
+            Ok(collided)
+        });
+        methods.add_method("test_sweep", |lua: &Lua, aabb, (mask, target_position): (u32, Position)| {
+            if target_position.world != aabb.world {
+                return Err(Error::runtime("mismatched world"));
+            }
+            let mut server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            let mut collision_time = 1.;
+            for entity in server.entities.borrow().values() {
+                let entity: std::cell::Ref<Entity> = entity.borrow().unwrap();
+                let position = entity.position.borrow().clone();
+                if position.world != aabb.world {
+                    continue;
+                }
+                let entity_type = server.entity_registry.entities.get(&entity.type_id).unwrap();
+                for collider in entity_type.colliders.values() {
+                    if collider.mask & mask != 0 {
+                        collision_time = collision_time.min(collider.aabb.offset(&position).sweep(&aabb.aabb, target_position.clone()).1);
+                    }
+                }
+            }
+            //todo: tiles
+            Ok(collision_time)
         });
     }
 }
