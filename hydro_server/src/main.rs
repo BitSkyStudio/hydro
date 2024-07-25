@@ -1,20 +1,28 @@
-#![feature(int_roundings)]
+#![feature(int_roundings, async_closure)]
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
+use bincode::config;
+use futures::{FutureExt, StreamExt};
 use immutable_string::ImmutableString;
 use mlua::{Lua, OwnedAnyUserData, Table};
 use mlua::prelude::{LuaOwnedFunction, LuaOwnedTable};
 use tokio::runtime::Runtime;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
-use warp::Filter;
+use warp::{Filter, Sink};
 use warp::http::Response;
+use warp::ws::Message;
+
+use hydro_common::{MessageC2S, MessageS2C};
+use hydro_common::pos::{CHUNK_SIZE, ChunkOffset, ChunkPosition};
 
 use crate::lua::Collider;
-use crate::util::{AABB, CHUNK_SIZE, ChunkOffset, ChunkPosition};
+use crate::util::AABB;
 
 mod util;
 mod lua;
@@ -25,6 +33,7 @@ fn main() {
     InitEnvironment::load_into_lua(&lua);
     lua.load(std::fs::read_to_string("simple_mod.lua").unwrap()).exec().unwrap();
     let init_env = lua.remove_app_data::<InitEnvironment>().unwrap();
+    let (new_clients_tx, new_clients_rx) = std::sync::mpsc::channel();
     let server = Arc::new(Server {
         lua,
         worlds: RefCell::new(HashMap::new()),
@@ -32,13 +41,14 @@ fn main() {
         event_handlers: init_env.event_handlers.into_inner(),
         entity_registry: init_env.entity_registry.into_inner(),
         entities: RefCell::new(HashMap::new()),
+        new_clients: new_clients_rx,
     });
     server.lua.set_app_data(server.clone());
 
     server.call_event("start".into(), server.lua.create_table().unwrap().into_owned()).unwrap();
 
     std::thread::spawn(|| {
-        Runtime::new().unwrap().block_on(web_server(8080));
+        Runtime::new().unwrap().block_on(web_server(8080, new_clients_tx));
     });
 
     let server_start = Instant::now();
@@ -58,11 +68,12 @@ fn main() {
         ticks_passed += 1;
     }
 }
-async fn web_server(port: u16) {
+async fn web_server(port: u16, new_client_tx: Sender<ClientConnection>) {
     let websocket = warp::path("ws")
         .and(warp::ws())
-        .map(|ws: warp::ws::Ws| {
-            ws.on_upgrade(|websocket| user_connected())
+        .map(move |ws: warp::ws::Ws| {
+            let new_client_tx = new_client_tx.clone();
+            ws.on_upgrade(move |websocket| user_connected(websocket, new_client_tx.clone()))
         });
     let html = warp::path::end().map(|| {
         Response::builder().body(include_str!("../host/index.html"))
@@ -72,8 +83,34 @@ async fn web_server(port: u16) {
     });
     warp::serve(websocket.or(html).or(wasm)).run(([0, 0, 0, 0], port)).await;
 }
-async fn user_connected() {
-    println!("here connect");
+async fn user_connected(ws: warp::ws::WebSocket, new_client_tx: Sender<ClientConnection>) {
+    println!("client connect");
+    let (client_ws_sender, mut client_ws_rcv) = ws.split();
+    let (client_sender_c2s, client_receiver_c2s) = std::sync::mpsc::channel();
+    let (client_sender_s2c, client_receiver_s2c) = tokio::sync::mpsc::unbounded_channel();
+    new_client_tx.send(ClientConnection { receiver: client_receiver_c2s, sender: client_sender_s2c }).unwrap();
+
+    let client_receiver_s2c = UnboundedReceiverStream::new(client_receiver_s2c);
+    tokio::task::spawn(
+        client_receiver_s2c.map(|message| Ok(Message::binary(bincode::serde::encode_to_vec::<MessageS2C, _>(message, config::standard()).unwrap()))).forward(client_ws_sender).map(|result| {
+            if let Err(e) = result {
+                eprintln!("error sending websocket msg: {}", e);
+            }
+        })
+    );
+
+    while let Some(result) = client_ws_rcv.next().await {
+        let msg = match result {
+            Ok(msg) => msg,
+            Err(e) => {
+                println!("error");
+                break;
+            }
+        };
+        client_sender_c2s.send(bincode::serde::decode_from_slice(msg.as_bytes(), config::standard()).unwrap().0).unwrap();
+    }
+    //todo: disconnect
+    println!("disconnect")
 }
 pub struct InitEnvironment {
     tile_sets: RefCell<HashMap<ImmutableString, TileSet>>,
@@ -120,6 +157,7 @@ pub struct Server {
     entity_registry: EntityRegistry,
     event_handlers: HashMap<ImmutableString, Vec<LuaOwnedFunction>>,
     entities: RefCell<HashMap<Uuid, OwnedAnyUserData>>,
+    new_clients: Receiver<ClientConnection>,
     lua: Lua,
 }
 impl Server {
@@ -135,6 +173,10 @@ impl Server {
     }
 }
 type ServerPtr = Arc<Server>;
+pub struct ClientConnection {
+    receiver: Receiver<MessageC2S>,
+    sender: tokio::sync::mpsc::UnboundedSender<MessageS2C>,
+}
 pub struct World {
     chunks: HashMap<ChunkPosition, Chunk>,
 }

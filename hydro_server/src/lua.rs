@@ -5,8 +5,10 @@ use immutable_string::ImmutableString;
 use mlua::{AnyUserData, Error, FromLua, Lua, OwnedAnyUserData, UserData, UserDataFields, UserDataMethods, Value};
 use uuid::Uuid;
 
+use hydro_common::pos::{CHUNK_SIZE, TilePosition};
+
 use crate::{Chunk, ChunkTileLayer, Server, ServerPtr, World};
-use crate::util::{AABB, CHUNK_SIZE, TilePosition};
+use crate::util::AABB;
 
 pub fn init_lua_functions(lua: &Lua) {
     let globals = lua.globals();
