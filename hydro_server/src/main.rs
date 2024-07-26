@@ -1,6 +1,6 @@
 #![feature(int_roundings, async_closure)]
 
-use std::cell::RefCell;
+use std::cell::{RefCell, RefMut};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
@@ -171,6 +171,11 @@ impl Server {
     pub fn tick(&self) {
         self.call_event("tick".into(), self.lua.create_table().unwrap().into_owned()).unwrap();
     }
+    pub fn get_chunk(&self, position: ChunkPosition, world: ImmutableString) -> RefMut<Chunk> {
+        RefMut::map(self.worlds.borrow_mut(), |worlds| {
+            worlds.entry(world).or_insert_with(|| World::new()).get_chunk(position)
+        })
+    }
 }
 type ServerPtr = Arc<Server>;
 pub struct ClientConnection {
@@ -185,6 +190,9 @@ impl World {
         World {
             chunks: HashMap::new()
         }
+    }
+    pub fn get_chunk(&mut self, position: ChunkPosition) -> &mut Chunk {
+        self.chunks.entry(position).or_insert_with(|| Chunk::new())
     }
 }
 pub struct Chunk {

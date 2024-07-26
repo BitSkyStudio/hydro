@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use hydro_common::pos::{CHUNK_SIZE, TilePosition};
 
-use crate::{Chunk, ChunkTileLayer, Server, ServerPtr, World};
+use crate::{ChunkTileLayer, Server, ServerPtr};
 use crate::util::AABB;
 
 pub fn init_lua_functions(lua: &Lua) {
@@ -49,10 +49,8 @@ impl UserData for LuaTileSet {
     fn add_methods<'lua, M: UserDataMethods<'lua, Self>>(methods: &mut M) {
         methods.add_method("get_at", |lua, tile_map, (pos, ): (Position,)| {
             let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
-            let worlds = server.worlds.borrow();
-            let world = worlds.get(&pos.world).ok_or(Error::runtime("world not loaded"))?;
             let (chunk_position, chunk_offset) = pos.align_to_tile().to_chunk_position();
-            let chunk = world.chunks.get(&chunk_position).ok_or(Error::runtime("chunk not loaded"))?;
+            let chunk = server.get_chunk(chunk_position, pos.world);
             let tile_id = match chunk.tile_layers.get(&tile_map.tileset) {
                 Some(tileset) => {
                     tileset.0[chunk_offset.index()]
@@ -66,10 +64,8 @@ impl UserData for LuaTileSet {
         });
         methods.add_method("set_at", |lua, tile_map, (pos, id): (Position, String)| {
             let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
-            let mut worlds = server.worlds.borrow_mut();
-            let world = worlds.get_mut(&pos.world).ok_or(Error::runtime("world not loaded"))?;
             let (chunk_position, chunk_offset) = pos.align_to_tile().to_chunk_position();
-            let chunk = world.chunks.get_mut(&chunk_position).ok_or(Error::runtime("chunk not loaded"))?;
+            let chunk = server.get_chunk(chunk_position, pos.world);
             let mut tile_layer = chunk.tile_layers.entry(tile_map.tileset.clone()).or_insert_with(|| ChunkTileLayer::new());
             let tileset = server.tile_sets.get(&tile_map.tileset).ok_or(Error::runtime("tileset doesn't exist"))?;
             tile_layer.0[chunk_offset.index()] = tileset.tiles.get::<ImmutableString>(&id.into()).ok_or(Error::runtime("tile not found in tileset"))?.id;
@@ -80,10 +76,8 @@ impl UserData for LuaTileSet {
         });
         methods.add_method("get_data_at", |lua, tile_map, (pos, ): (Position,)| {
             let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
-            let mut worlds = server.worlds.borrow_mut();
-            let world = worlds.get_mut(&pos.world).ok_or(Error::runtime("world not loaded"))?;
             let (chunk_position, chunk_offset) = pos.align_to_tile().to_chunk_position();
-            let chunk = world.chunks.get_mut(&chunk_position).ok_or(Error::runtime("chunk not loaded"))?;
+            let chunk = server.get_chunk(chunk_position, pos.world);
             let mut tile_layer = chunk.tile_layers.entry(tile_map.tileset.clone()).or_insert_with(|| ChunkTileLayer::new());
             let tileset = server.tile_sets.get(&tile_map.tileset).ok_or(Error::runtime("tileset not found"))?;
             let tile_table = tileset.tiles.get(tileset.tile_ids.get(tile_layer.0[chunk_offset.x as usize + (chunk_offset.y as usize * CHUNK_SIZE as usize)] as usize).unwrap()).unwrap().data.clone();
@@ -111,23 +105,7 @@ impl UserData for Position {
         fields.add_field_method_get("y", |_, pos| { Ok(pos.y) });
         fields.add_field_method_get("world", |_, pos| { Ok(pos.world.to_string()) });
     }
-    fn add_methods<'lua, M: UserDataMethods<'lua, Self>>(methods: &mut M) {
-        methods.add_method("is_loaded", |lua, pos, ()| {
-            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
-            let worlds = server.worlds.borrow();
-            match worlds.get(&pos.world) {
-                Some(world) => Ok(world.chunks.contains_key(&pos.align_to_tile().to_chunk_position().0)),
-                None => Ok(false)
-            }
-        });
-        methods.add_method("load", |lua, pos, ()| {
-            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
-            let mut worlds = server.worlds.borrow_mut();
-            let world = worlds.entry(pos.world.clone()).or_insert_with(|| World::new());
-            world.chunks.entry(pos.align_to_tile().to_chunk_position().0).or_insert_with(|| Chunk::new());
-            Ok(())
-        });
-    }
+    fn add_methods<'lua, M: UserDataMethods<'lua, Self>>(methods: &mut M) {}
 }
 impl Position {
     pub fn align_to_tile(&self) -> TilePosition {
@@ -151,8 +129,7 @@ pub struct Entity {
 impl Entity {
     pub fn new(lua: &Lua, id: ImmutableString, position: Position) -> mlua::Result<OwnedAnyUserData> {
         let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
-        let mut worlds = server.worlds.borrow_mut();
-        let chunk = worlds.get_mut(&position.world).ok_or(Error::runtime("world not loaded"))?.chunks.get_mut(&position.align_to_tile().to_chunk_position().0).ok_or(Error::runtime("chunk not loaded"))?;
+        let chunk = server.get_chunk(position.align_to_tile().to_chunk_position().0, position.world.clone());
         let table = lua.create_table().unwrap().into_owned();
         let metatable = lua.create_table().unwrap().into_owned();
         metatable.to_ref().set("__index", server.entity_registry.entities.get(&id).unwrap().data.to_ref()).unwrap();
@@ -186,15 +163,8 @@ impl UserData for Entity {
             let old_chunk_position = old_position.align_to_tile().to_chunk_position().0;
             let new_chunk_position = position.align_to_tile().to_chunk_position().0;
             if old_position.world != position.world || old_chunk_position != new_chunk_position {
-                let mut worlds = server.worlds.borrow_mut();
-                {
-                    let old_world = worlds.get_mut(&old_position.world).unwrap();
-                    old_world.chunks.get_mut(&old_chunk_position).unwrap().entities.remove(&entity.uuid);
-                }
-                {
-                    let new_world = worlds.get_mut(&position.world).unwrap();
-                    new_world.chunks.get_mut(&new_chunk_position).unwrap().entities.insert(entity.uuid, entity_obj);
-                }
+                server.get_chunk(old_chunk_position, old_position.world).entities.remove(&entity.uuid);
+                server.get_chunk(new_chunk_position, position.world.clone()).entities.insert(entity.uuid, entity_obj);
             }
             *entity.position.borrow_mut() = position;
             Ok(())
@@ -215,8 +185,7 @@ impl UserData for Entity {
             server.entities.borrow_mut().remove(&entity.uuid);
             let position = entity.position.borrow().clone();
             let chunk = position.align_to_tile().to_chunk_position().0;
-            let mut worlds = server.worlds.borrow_mut();
-            let mut chunk = worlds.get_mut(&position.world).unwrap().chunks.get_mut(&chunk).unwrap();
+            let mut chunk = server.get_chunk(chunk, position.world);
             chunk.entities.remove(&entity.uuid);
             entity.removed.load(Ordering::SeqCst);
             Ok(())
