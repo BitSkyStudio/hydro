@@ -55,7 +55,7 @@ impl UserData for LuaTileSet {
             let chunk = world.chunks.get(&chunk_position).ok_or(Error::runtime("chunk not loaded"))?;
             let tile_id = match chunk.tile_layers.get(&tile_map.tileset) {
                 Some(tileset) => {
-                    tileset.0[chunk_offset.x as usize + (chunk_offset.y as usize * CHUNK_SIZE as usize)]
+                    tileset.0[chunk_offset.index()]
                 }
                 None => {
                     0
@@ -72,7 +72,7 @@ impl UserData for LuaTileSet {
             let chunk = world.chunks.get_mut(&chunk_position).ok_or(Error::runtime("chunk not loaded"))?;
             let mut tile_layer = chunk.tile_layers.entry(tile_map.tileset.clone()).or_insert_with(|| ChunkTileLayer::new());
             let tileset = server.tile_sets.get(&tile_map.tileset).ok_or(Error::runtime("tileset doesn't exist"))?;
-            tile_layer.0[chunk_offset.x as usize + (chunk_offset.y as usize * CHUNK_SIZE as usize)] = tileset.tiles.get::<ImmutableString>(&id.into()).ok_or(Error::runtime("tile not found in tileset"))?.id;
+            tile_layer.0[chunk_offset.index()] = tileset.tiles.get::<ImmutableString>(&id.into()).ok_or(Error::runtime("tile not found in tileset"))?.id;
             if let Some(tile_data) = tile_layer.1.remove(&chunk_offset) {
                 tile_data.to_ref().set("invalid", true)?;
             }

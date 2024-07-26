@@ -12,6 +12,11 @@ pub struct ChunkOffset {
     pub x: u8,
     pub y: u8,
 }
+impl ChunkOffset {
+    pub fn index(&self) -> usize {
+        self.x as usize + (self.y as usize * CHUNK_SIZE as usize)
+    }
+}
 #[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct TilePosition {
     pub x: i32,

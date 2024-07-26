@@ -632,6 +632,7 @@ dependencies = [
  "hydro_common",
  "macroquad",
  "quad-net",
+ "uuid",
 ]
 
 [[package]]

@@ -15,14 +15,14 @@ pub enum MessageC2S {}
 pub enum MessageS2C {
     LoadChunk(ChunkPosition, HashMap<String, Vec<u32>>, Vec<EntityAddMessage>),
     UnloadChunk(ChunkPosition, Vec<Uuid>),
-    SetTile(TilePosition, u32),
+    SetTile(TilePosition, String, u32),
     AddEntity(EntityAddMessage),
     RemoveEntity(Uuid),
     MoveEntity(Uuid, Vec2),
 }
 #[derive(Serialize, Deserialize)]
 pub struct EntityAddMessage {
-    uuid: Uuid,
-    entity_type: String,
-    position: Vec2,
+    pub uuid: Uuid,
+    pub entity_type: String,
+    pub position: Vec2,
 }
