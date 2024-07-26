@@ -65,7 +65,7 @@ impl UserData for LuaTileSet {
         methods.add_method("set_at", |lua, tile_map, (pos, id): (Position, String)| {
             let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
             let (chunk_position, chunk_offset) = pos.align_to_tile().to_chunk_position();
-            let chunk = server.get_chunk(chunk_position, pos.world);
+            let mut chunk = server.get_chunk(chunk_position, pos.world);
             let mut tile_layer = chunk.tile_layers.entry(tile_map.tileset.clone()).or_insert_with(|| ChunkTileLayer::new());
             let tileset = server.tile_sets.get(&tile_map.tileset).ok_or(Error::runtime("tileset doesn't exist"))?;
             tile_layer.0[chunk_offset.index()] = tileset.tiles.get::<ImmutableString>(&id.into()).ok_or(Error::runtime("tile not found in tileset"))?.id;
@@ -77,7 +77,7 @@ impl UserData for LuaTileSet {
         methods.add_method("get_data_at", |lua, tile_map, (pos, ): (Position,)| {
             let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
             let (chunk_position, chunk_offset) = pos.align_to_tile().to_chunk_position();
-            let chunk = server.get_chunk(chunk_position, pos.world);
+            let mut chunk = server.get_chunk(chunk_position, pos.world);
             let mut tile_layer = chunk.tile_layers.entry(tile_map.tileset.clone()).or_insert_with(|| ChunkTileLayer::new());
             let tileset = server.tile_sets.get(&tile_map.tileset).ok_or(Error::runtime("tileset not found"))?;
             let tile_table = tileset.tiles.get(tileset.tile_ids.get(tile_layer.0[chunk_offset.x as usize + (chunk_offset.y as usize * CHUNK_SIZE as usize)] as usize).unwrap()).unwrap().data.clone();
@@ -129,7 +129,7 @@ pub struct Entity {
 impl Entity {
     pub fn new(lua: &Lua, id: ImmutableString, position: Position) -> mlua::Result<OwnedAnyUserData> {
         let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
-        let chunk = server.get_chunk(position.align_to_tile().to_chunk_position().0, position.world.clone());
+        let mut chunk = server.get_chunk(position.align_to_tile().to_chunk_position().0, position.world.clone());
         let table = lua.create_table().unwrap().into_owned();
         let metatable = lua.create_table().unwrap().into_owned();
         metatable.to_ref().set("__index", server.entity_registry.entities.get(&id).unwrap().data.to_ref()).unwrap();
