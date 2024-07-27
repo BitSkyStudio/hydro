@@ -7,7 +7,7 @@ use macroquad::prelude::*;
 use quad_net::web_socket::WebSocket;
 use uuid::Uuid;
 
-use hydro_common::{EntityAddMessage, MessageC2S, MessageS2C};
+use hydro_common::{AnimationData, EntityAddMessage, MessageC2S, MessageS2C, RunningAnimation};
 use hydro_common::pos::{CHUNK_SIZE, ChunkOffset, ChunkPosition};
 
 #[macroquad::main("hydro")]
@@ -48,9 +48,10 @@ async fn main() {
                 MessageS2C::RemoveEntity(id) => {
                     world.entities.remove(&id);
                 }
-                MessageS2C::MoveEntity(id, position) => {
+                MessageS2C::UpdateEntity(id, position, animation) => {
                     if let Some(entity) = world.entities.get_mut(&id) {
                         entity.0 = Vec2::new(position.x, position.y);
+                        entity.2 = animation;
                     }
                 }
                 MessageS2C::LoadContent(content_msg) => {
@@ -63,7 +64,23 @@ async fn main() {
                                 size: value.size,
                                 tiles: value.tiles,
                             })
-                        }).collect()
+                        }).collect(),
+                        entities: content_msg.entities.into_iter().map(|(key, value)|{
+                            (key, EntityContent {
+                                size: value.size,
+                                animations: value.animations.into_iter().map(|(key, value)|{
+                                    let texture = Texture2D::from_file_with_format(value.image.as_slice(), Some(ImageFormat::Png));
+                                    texture.set_filter(FilterMode::Nearest);
+                                    (key, AnimationDataTextured{
+                                        image: texture,
+                                        period: value.period,
+                                        count: value.count,
+                                        flip: value.flip,
+                                        looped: value.looped,
+                                    })
+                                })
+                            })
+                        });
                     });
                 }
             }
@@ -93,6 +110,9 @@ async fn main() {
                     }
                 }
             }
+            for (position, entity_type, animation) in world.entities.values() {
+                draw_texture_ex();
+            }
         }
 
         /*draw_line(40.0, 40.0, 100.0, 200.0, 15.0, BLUE);
@@ -106,19 +126,31 @@ async fn main() {
 }
 pub struct Content {
     pub tilesets: HashMap<String, TileSetContent>,
+    pub entities: HashMap<String, EntityContent>,
 }
 pub struct TileSetContent {
     pub asset: Texture2D,
     pub size: u8,
     pub tiles: Vec<Option<(u8, u8)>>,
 }
+pub struct EntityContent {
+    pub animations: HashMap<String, AnimationDataTextured>,
+    pub size: (f64, f64),
+}
+pub struct AnimationDataTextured {
+    pub image: Texture2D,
+    pub count: u16,
+    pub period: f64,
+    pub looped: bool,
+    pub flip: bool,
+}
 pub struct World {
     chunks: HashMap<ChunkPosition, HashMap<String, Vec<u32>>>,
-    entities: HashMap<Uuid, (Vec2, String)>,
+    entities: HashMap<Uuid, (Vec2, String, RunningAnimation)>,
 }
 impl World {
     pub fn add_entity(&mut self, entity: EntityAddMessage) {
-        self.entities.insert(entity.uuid, (Vec2::new(entity.position.x, entity.position.y), entity.entity_type));
+        self.entities.insert(entity.uuid, (Vec2::new(entity.position.x, entity.position.y), entity.entity_type, entity.animation));
     }
 }
 

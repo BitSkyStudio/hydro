@@ -18,7 +18,7 @@ use warp::{Filter, Sink};
 use warp::http::Response;
 use warp::ws::Message;
 
-use hydro_common::{LoadContentMessage, MessageC2S, MessageS2C, TileSetContentMessage};
+use hydro_common::{AnimationData, EntityContentMessage, LoadContentMessage, MessageC2S, MessageS2C, TileSetContentMessage};
 use hydro_common::pos::{CHUNK_SIZE, ChunkOffset, ChunkPosition};
 
 use crate::lua::{Collider, Entity};
@@ -69,7 +69,13 @@ fn main() {
                     asset: value.asset.0.clone(),
                     size: value.asset.1,
                     tiles: value.tile_ids.iter().map(|id| value.tiles.get(id).unwrap().asset_position).collect(),
-                })).collect()
+                })).collect(),
+                entities: server.entity_registry.entities.iter().map(|(key, value)| {
+                    (key.to_string(), EntityContentMessage {
+                        size: value.size,
+                        animations: value.animations.iter().map(|(key, value)| (key.to_string(), value.clone())).collect(),
+                    })
+                }).collect(),
             })).unwrap();
             for (position, chunk) in server.worlds.borrow().values().map(|world| world.chunks.iter()).flatten() {
                 client.connection.sender.send(MessageS2C::LoadChunk(*position,
@@ -294,7 +300,10 @@ impl TileSet {
 pub struct EntityType {
     colliders: HashMap<ImmutableString, Collider>,
     data: LuaOwnedTable,
+    animations: HashMap<ImmutableString, AnimationData>,
+    size: (f64, f64),
 }
+
 pub struct EntityRegistry {
     entities: HashMap<ImmutableString, EntityType>,
 }
@@ -302,6 +311,12 @@ impl EntityRegistry {
     pub fn register(&mut self, id: ImmutableString, data: LuaOwnedTable) {
         let colliders: Table = data.to_ref().get("colliders").unwrap();
         data.to_ref().set("colliders", None::<bool>).unwrap();
+        let width: f64 = data.to_ref().get("width").unwrap();
+        data.to_ref().set("width", None::<bool>).unwrap();
+        let height: f64 = data.to_ref().get("height").unwrap();
+        data.to_ref().set("height", None::<bool>).unwrap();
+        let animations: Table = data.to_ref().get("animations").unwrap();
+        data.to_ref().set("animations", None::<bool>).unwrap();
         self.entities.insert(id, EntityType {
             colliders: colliders.pairs::<String, Table>().filter_map(|collider| match collider {
                 Ok((name, collider)) => Some((name.into(), Collider {
@@ -310,6 +325,17 @@ impl EntityRegistry {
                 })),
                 Err(_) => None,
             }).collect(),
+            animations: animations.pairs::<String, Table>().filter_map(|animation| match animation {
+                Ok((name, animation)) => Some((name.into(), AnimationData {
+                    flip: animation.get::<_, Option<bool>>("flip").unwrap().unwrap_or(false),
+                    count: animation.get("count").unwrap(),
+                    looped: animation.get("loop").unwrap(),
+                    period: animation.get::<_, Option<f64>>("period").unwrap().unwrap_or(0.),
+                    image: std::fs::read(format!("assets/{}.png", animation.get::<_, String>("file").unwrap())).unwrap(),
+                })),
+                Err(_) => None
+            }).collect(),
+            size: (width, height),
             data,
         });
     }

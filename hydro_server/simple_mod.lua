@@ -18,11 +18,22 @@ register_entity("player", {
         main={
             x=0,
             y=0,
-            w=0.3,
+            w=0.4,
             h=0.8,
             mask=1
         }
-    }
+    },
+    animations={
+        default={
+            file="player",
+            count=1,
+            period=1,
+            loop=true,
+            flip=false,
+        }
+    },
+    width=0.4,
+    height=0.8
 })
 
 register_event("start", function()

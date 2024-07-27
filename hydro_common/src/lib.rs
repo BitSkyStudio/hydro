@@ -18,7 +18,7 @@ pub enum MessageS2C {
     SetTile(TilePosition, String, u32),
     AddEntity(EntityAddMessage),
     RemoveEntity(Uuid),
-    MoveEntity(Uuid, Vec2),
+    UpdateEntity(Uuid, Vec2, RunningAnimation),
     LoadContent(LoadContentMessage),
 }
 #[derive(Serialize, Deserialize)]
@@ -26,14 +26,34 @@ pub struct EntityAddMessage {
     pub uuid: Uuid,
     pub entity_type: String,
     pub position: Vec2,
+    pub animation: RunningAnimation,
 }
 #[derive(Serialize, Deserialize)]
 pub struct LoadContentMessage {
     pub tilesets: HashMap<String, TileSetContentMessage>,
+    pub entities: HashMap<String, EntityContentMessage>,
 }
 #[derive(Serialize, Deserialize)]
 pub struct TileSetContentMessage {
     pub asset: Vec<u8>,
     pub size: u8,
     pub tiles: Vec<Option<(u8, u8)>>,
+}
+#[derive(Serialize, Deserialize)]
+pub struct EntityContentMessage {
+    pub animations: HashMap<String, AnimationData>,
+    pub size: (f64, f64),
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct AnimationData {
+    pub image: Vec<u8>,
+    pub count: u16,
+    pub period: f64,
+    pub looped: bool,
+    pub flip: bool,
+}
+#[derive(Serialize, Deserialize)]
+pub struct RunningAnimation {
+    pub id: String,
+    pub time: f32,
 }
