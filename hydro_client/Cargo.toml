@@ -9,3 +9,4 @@ quad-net = { git = "https://github.com/not-fl3/quad-net.git" }
 hydro_common = { path = "../hydro_common" }
 bincode = { version = "2.0.0-rc.3", features = ["serde"] }
 uuid = "1.10.0"
+base64 = "0.22.1"

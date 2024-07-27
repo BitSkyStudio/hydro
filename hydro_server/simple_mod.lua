@@ -28,6 +28,7 @@ register_entity("player", {
 register_event("start", function()
     pos1 = pos(0, 0, "lobby")
     tileset("main"):set_at(pos1, "stone")
+    tileset("main"):set_at(pos(1, 1, "lobby"), "stone")
     print(tileset("main"):get_data_at(pos1).aaa)
     print(spawn("player", pos1):get_collider("main"):tiles_overlapping())
     print("here")

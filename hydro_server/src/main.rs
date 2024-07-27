@@ -115,7 +115,7 @@ async fn user_connected(ws: warp::ws::WebSocket, new_client_tx: Sender<ClientCon
     tokio::task::spawn(
         client_receiver_s2c.map(|message| {
             let message = bincode::serde::encode_to_vec::<MessageS2C, _>(message, config::standard()).unwrap();
-            Ok(Message::binary(message))
+            Ok(Message::text(base64::encode(message)))
         }).forward(client_ws_sender).map(|result| {
             if let Err(e) = result {
                 eprintln!("error sending websocket msg: {}", e);

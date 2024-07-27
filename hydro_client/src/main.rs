@@ -55,20 +55,26 @@ async fn main() {
                 }
                 MessageS2C::LoadContent(content_msg) => {
                     content = Some(Content {
-                        tilesets: content_msg.tilesets.into_iter().map(|(key, value)| (key, TileSetContent {
-                            asset: Texture2D::from_file_with_format(value.asset.as_slice(), Some(ImageFormat::Png)),
-                            size: value.size,
-                            tiles: value.tiles,
-                        })).collect()
+                        tilesets: content_msg.tilesets.into_iter().map(|(key, value)| {
+                            let texture = Texture2D::from_file_with_format(value.asset.as_slice(), Some(ImageFormat::Png));
+                            texture.set_filter(FilterMode::Nearest);
+                            (key, TileSetContent {
+                                asset: texture,
+                                size: value.size,
+                                tiles: value.tiles,
+                            })
+                        }).collect()
                     });
                 }
             }
         }
         clear_background(RED);
-
-        /*set_camera(&Camera2D {
+        let zoom = 50.;
+        set_camera(&Camera2D {
+            target: Vec2::new(0., 0.),
+            zoom: Vec2::new(1. / (screen_width() / zoom), 1. / (screen_height() / zoom)),
             ..Default::default()
-        });*/
+        });
         if let Some(content) = &content {
             for (position, tiles) in &world.chunks {
                 for (tileset, tiles) in tiles {
@@ -89,11 +95,11 @@ async fn main() {
             }
         }
 
-        draw_line(40.0, 40.0, 100.0, 200.0, 15.0, BLUE);
+        /*draw_line(40.0, 40.0, 100.0, 200.0, 15.0, BLUE);
         draw_rectangle(screen_width() / 2.0 - 60.0, 100.0, 120.0, 60.0, GREEN);
         draw_circle(screen_width() - 30.0, screen_height() - 30.0, 15.0, YELLOW);
 
-        draw_text("IT WORKS!", 20.0, 20.0, 30.0, DARKGRAY);
+        draw_text("IT WORKS!", 20.0, 20.0, 30.0, DARKGRAY);*/
 
         next_frame().await
     }
@@ -131,12 +137,7 @@ impl Connection {
     pub fn read_messages(&mut self) -> Vec<MessageS2C> {
         let mut messages = Vec::new();
         while let Some(message) = self.socket.try_recv() {
-            info!("len: {}", message.len());
-
-            if message.len() == 0 {
-                continue;
-            }
-            messages.push(bincode::serde::decode_from_slice(message.as_slice(), config::standard()).unwrap().0);
+            messages.push(bincode::serde::decode_from_slice(base64::decode(message).unwrap().as_slice(), config::standard()).unwrap().0);
         }
         messages
     }
