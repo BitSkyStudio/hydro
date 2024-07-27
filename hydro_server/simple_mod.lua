@@ -1,14 +1,14 @@
 register_tileset("main", {
     tiles = {
         {
-            id = "air",
-            aaa = 5,
-            collision_mask = 0
-        },
-        {
             id = "stone",
-            collision_mask = 1
+            collision_mask = 1,
+            asset_pos = {x=8,y=5}
         }
+    },
+    asset = {
+        file = "root_tileset0",
+        size = 8,
     }
 })
 

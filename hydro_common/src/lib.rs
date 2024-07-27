@@ -19,10 +19,21 @@ pub enum MessageS2C {
     AddEntity(EntityAddMessage),
     RemoveEntity(Uuid),
     MoveEntity(Uuid, Vec2),
+    LoadContent(LoadContentMessage),
 }
 #[derive(Serialize, Deserialize)]
 pub struct EntityAddMessage {
     pub uuid: Uuid,
     pub entity_type: String,
     pub position: Vec2,
+}
+#[derive(Serialize, Deserialize)]
+pub struct LoadContentMessage {
+    pub tilesets: HashMap<String, TileSetContent>,
+}
+#[derive(Serialize, Deserialize)]
+pub struct TileSetContent {
+    pub asset: Vec<u8>,
+    pub size: u8,
+    pub tiles: Vec<Option<(u8, u8)>>,
 }

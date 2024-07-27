@@ -18,7 +18,7 @@ use warp::{Filter, Sink};
 use warp::http::Response;
 use warp::ws::Message;
 
-use hydro_common::{MessageC2S, MessageS2C};
+use hydro_common::{LoadContentMessage, MessageC2S, MessageS2C, TileSetContent};
 use hydro_common::pos::{CHUNK_SIZE, ChunkOffset, ChunkPosition};
 
 use crate::lua::Collider;
@@ -42,6 +42,7 @@ fn main() {
         entity_registry: init_env.entity_registry.into_inner(),
         entities: RefCell::new(HashMap::new()),
         new_clients: new_clients_rx,
+        clients: RefCell::new(Vec::new()),
     });
     server.lua.set_app_data(server.clone());
 
@@ -59,7 +60,21 @@ fn main() {
             globals.set("ticks_passed", ticks_passed).unwrap();
             globals.set("seconds_passed", server_start.elapsed().as_secs()).unwrap();
         }
+        while let Ok(client) = server.new_clients.try_recv() {
+            let client = Client {
+                connection: client,
+            };
+            client.connection.sender.send(MessageS2C::LoadContent(LoadContentMessage {
+                tilesets: server.tile_sets.iter().map(|(key, value)| (key.to_string(), TileSetContent {
+                    asset: value.asset.0.clone(),
+                    size: value.asset.1,
+                    tiles: value.tile_ids.iter().map(|id| value.tiles.get(id).unwrap().asset_position).collect(),
+                })).collect()
+            })).unwrap();
+            server.clients.borrow_mut().push(client);
+        }
         server.tick();
+
         let sleep_time = (ticks_passed as f64 * (1000. / Server::TPS as f64))
             - server_start.elapsed().as_millis() as f64;
         if sleep_time > 0. {
@@ -128,13 +143,27 @@ impl InitEnvironment {
         let globals = lua.globals();
         globals.set("register_event", lua.create_function(|lua, (name, function): (String, LuaOwnedFunction)| {
             let init_env = lua.app_data_ref::<InitEnvironment>().ok_or(mlua::Error::runtime("this method can only be used during initialization"))?;
-            init_env.event_handlers.borrow_mut().entry(name.into()).or_insert_with(|| Vec::new()).push(function);
+            init_env.event_handlers.borrow_mut().entry(name.into()).or_insert_with(Vec::new).push(function);
             Ok(())
         }).unwrap()).unwrap();
         globals.set("register_tileset", lua.create_function(|lua, (name, table): (String, Table)| {
             let init_env = lua.app_data_ref::<InitEnvironment>().ok_or(mlua::Error::runtime("this method can only be used during initialization"))?;
             let mut tile_sets = init_env.tile_sets.borrow_mut();
-            let mut tile_set = TileSet::new();
+            let mut tile_set = TileSet::new({
+                let assets_table: Table = table.get("assets").unwrap();
+                let file: String = assets_table.get("file").unwrap();
+                let size: u8 = assets_table.get("size").unwrap();
+                let image_data = std::fs::read(format!("assets/{}.png", file)).unwrap();
+                (image_data, size)
+            });
+            tile_set.register(match table.get::<_, Option<Table>>("default").unwrap() {
+                Some(default) => default.into_owned(),
+                None => {
+                    let table = lua.create_table().unwrap();
+                    table.set("id", "default").unwrap();
+                    table.into_owned()
+                }
+            }).unwrap();
             let tiles_table: Table = table.get("tiles").unwrap();
             for tile in tiles_table.sequence_values() {
                 let tile: Table = tile.unwrap();
@@ -151,6 +180,9 @@ impl InitEnvironment {
         }).unwrap()).unwrap();
     }
 }
+pub struct Client {
+    connection: ClientConnection,
+}
 pub struct Server {
     worlds: RefCell<HashMap<ImmutableString, World>>,
     tile_sets: HashMap<ImmutableString, TileSet>,
@@ -158,6 +190,7 @@ pub struct Server {
     event_handlers: HashMap<ImmutableString, Vec<LuaOwnedFunction>>,
     entities: RefCell<HashMap<Uuid, OwnedAnyUserData>>,
     new_clients: Receiver<ClientConnection>,
+    clients: RefCell<Vec<Client>>,
     lua: Lua,
 }
 impl Server {
@@ -173,7 +206,7 @@ impl Server {
     }
     pub fn get_chunk(&self, position: ChunkPosition, world: ImmutableString) -> RefMut<Chunk> {
         RefMut::map(self.worlds.borrow_mut(), |worlds| {
-            worlds.entry(world).or_insert_with(|| World::new()).get_chunk(position)
+            worlds.entry(world).or_insert_with(World::new).get_chunk(position)
         })
     }
 }
@@ -211,16 +244,19 @@ pub struct TileType {
     data: LuaOwnedTable,
     id: u32,
     collision_mask: u32,
+    asset_position: Option<(u8, u8)>,
 }
 pub struct TileSet {
     tiles: HashMap<ImmutableString, TileType>,
     tile_ids: Vec<ImmutableString>,
+    asset: (Vec<u8>, u8),
 }
 impl TileSet {
-    pub fn new() -> Self {
+    pub fn new(asset: (Vec<u8>, u8)) -> Self {
         TileSet {
             tiles: HashMap::new(),
             tile_ids: Vec::new(),
+            asset,
         }
     }
     pub fn register(&mut self, data: LuaOwnedTable) -> mlua::Result<()> {
@@ -229,13 +265,16 @@ impl TileSet {
             return Err(mlua::Error::runtime("registered two tiles with same id"));
         }
         let num_id = self.tile_ids.len() as u32;
-        let collision_mask = data.to_ref().get("collision_mask").unwrap();
+        let collision_mask: Option<u32> = data.to_ref().get("collision_mask").unwrap();
         data.to_ref().set("collision_mask", None::<bool>).unwrap();
+        let asset_pos: Option<Table> = data.to_ref().get("asset_pos").unwrap();
+        data.to_ref().set("asset_pos", None::<bool>).unwrap();
         self.tile_ids.push(id.clone());
         self.tiles.insert(id, TileType {
             id: num_id,
+            asset_position: asset_pos.map(|table| (table.get("x").unwrap(), table.get("y").unwrap())),
+            collision_mask: collision_mask.unwrap_or(0),
             data,
-            collision_mask,
         });
         Ok(())
     }
