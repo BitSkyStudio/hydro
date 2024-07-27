@@ -5,7 +5,8 @@ use immutable_string::ImmutableString;
 use mlua::{AnyUserData, Error, FromLua, Lua, OwnedAnyUserData, UserData, UserDataFields, UserDataMethods, Value};
 use uuid::Uuid;
 
-use hydro_common::pos::{CHUNK_SIZE, TilePosition};
+use hydro_common::EntityAddMessage;
+use hydro_common::pos::{CHUNK_SIZE, TilePosition, Vec2};
 
 use crate::{ChunkTileLayer, Server, ServerPtr};
 use crate::util::AABB;
@@ -145,6 +146,14 @@ impl Entity {
         server.entities.borrow_mut().insert(uuid, user_data.clone());
         chunk.entities.insert(uuid, user_data.clone());
         Ok(user_data)
+    }
+    pub fn create_add_message(&self) -> EntityAddMessage {
+        let position = self.position.borrow();
+        EntityAddMessage {
+            position: Vec2 { x: position.x as f32, y: position.y as f32 },
+            entity_type: self.type_id.to_string(),
+            uuid: self.uuid,
+        }
     }
 }
 impl UserData for Entity {

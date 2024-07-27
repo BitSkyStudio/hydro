@@ -18,10 +18,10 @@ use warp::{Filter, Sink};
 use warp::http::Response;
 use warp::ws::Message;
 
-use hydro_common::{LoadContentMessage, MessageC2S, MessageS2C, TileSetContent};
+use hydro_common::{LoadContentMessage, MessageC2S, MessageS2C, TileSetContentMessage};
 use hydro_common::pos::{CHUNK_SIZE, ChunkOffset, ChunkPosition};
 
-use crate::lua::Collider;
+use crate::lua::{Collider, Entity};
 use crate::util::AABB;
 
 mod util;
@@ -65,12 +65,18 @@ fn main() {
                 connection: client,
             };
             client.connection.sender.send(MessageS2C::LoadContent(LoadContentMessage {
-                tilesets: server.tile_sets.iter().map(|(key, value)| (key.to_string(), TileSetContent {
+                tilesets: server.tile_sets.iter().map(|(key, value)| (key.to_string(), TileSetContentMessage {
                     asset: value.asset.0.clone(),
                     size: value.asset.1,
                     tiles: value.tile_ids.iter().map(|id| value.tiles.get(id).unwrap().asset_position).collect(),
                 })).collect()
             })).unwrap();
+            for (position, chunk) in server.worlds.borrow().values().map(|world| world.chunks.iter()).flatten() {
+                client.connection.sender.send(MessageS2C::LoadChunk(*position,
+                                                                    chunk.tile_layers.iter().map(|(key, value)| (key.to_string(), value.0.clone())).collect(),
+                                                                    chunk.entities.values().map(|entity| entity.borrow::<Entity>().unwrap().create_add_message()).collect(),
+                )).unwrap();
+            }
             server.clients.borrow_mut().push(client);
         }
         server.tick();
@@ -107,7 +113,10 @@ async fn user_connected(ws: warp::ws::WebSocket, new_client_tx: Sender<ClientCon
 
     let client_receiver_s2c = UnboundedReceiverStream::new(client_receiver_s2c);
     tokio::task::spawn(
-        client_receiver_s2c.map(|message| Ok(Message::binary(bincode::serde::encode_to_vec::<MessageS2C, _>(message, config::standard()).unwrap()))).forward(client_ws_sender).map(|result| {
+        client_receiver_s2c.map(|message| {
+            let message = bincode::serde::encode_to_vec::<MessageS2C, _>(message, config::standard()).unwrap();
+            Ok(Message::binary(message))
+        }).forward(client_ws_sender).map(|result| {
             if let Err(e) = result {
                 eprintln!("error sending websocket msg: {}", e);
             }
@@ -150,7 +159,7 @@ impl InitEnvironment {
             let init_env = lua.app_data_ref::<InitEnvironment>().ok_or(mlua::Error::runtime("this method can only be used during initialization"))?;
             let mut tile_sets = init_env.tile_sets.borrow_mut();
             let mut tile_set = TileSet::new({
-                let assets_table: Table = table.get("assets").unwrap();
+                let assets_table: Table = table.get("asset").unwrap();
                 let file: String = assets_table.get("file").unwrap();
                 let size: u8 = assets_table.get("size").unwrap();
                 let image_data = std::fs::read(format!("assets/{}.png", file)).unwrap();

@@ -29,10 +29,10 @@ pub struct EntityAddMessage {
 }
 #[derive(Serialize, Deserialize)]
 pub struct LoadContentMessage {
-    pub tilesets: HashMap<String, TileSetContent>,
+    pub tilesets: HashMap<String, TileSetContentMessage>,
 }
 #[derive(Serialize, Deserialize)]
-pub struct TileSetContent {
+pub struct TileSetContentMessage {
     pub asset: Vec<u8>,
     pub size: u8,
     pub tiles: Vec<Option<(u8, u8)>>,

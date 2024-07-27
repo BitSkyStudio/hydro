@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-macroquad = { version = "0.3" }
-quad-net = "0.1.1"
+macroquad = { version = "0.4.11" }
+quad-net = { git = "https://github.com/not-fl3/quad-net.git" }
 hydro_common = { path = "../hydro_common" }
-bincode = "2.0.0-rc.3"
+bincode = { version = "2.0.0-rc.3", features = ["serde"] }
 uuid = "1.10.0"
