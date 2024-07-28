@@ -65,28 +65,28 @@ async fn main() {
                                 tiles: value.tiles,
                             })
                         }).collect(),
-                        entities: content_msg.entities.into_iter().map(|(key, value)|{
+                        entities: content_msg.entities.into_iter().map(|(key, value)| {
                             (key, EntityContent {
                                 size: value.size,
-                                animations: value.animations.into_iter().map(|(key, value)|{
+                                animations: value.animations.into_iter().map(|(key, value)| {
                                     let texture = Texture2D::from_file_with_format(value.image.as_slice(), Some(ImageFormat::Png));
                                     texture.set_filter(FilterMode::Nearest);
-                                    (key, AnimationDataTextured{
+                                    (key, AnimationDataTextured {
                                         image: texture,
                                         period: value.period,
                                         count: value.count,
                                         flip: value.flip,
                                         looped: value.looped,
                                     })
-                                })
+                                }).collect(),
                             })
-                        });
+                        }).collect(),
                     });
                 }
             }
         }
         clear_background(RED);
-        let zoom = 50.;
+        let zoom = 200.;
         set_camera(&Camera2D {
             target: Vec2::new(0., 0.),
             zoom: Vec2::new(1. / (screen_width() / zoom), 1. / (screen_height() / zoom)),
@@ -111,7 +111,18 @@ async fn main() {
                 }
             }
             for (position, entity_type, animation) in world.entities.values() {
-                draw_texture_ex();
+                let entity = content.entities.get(entity_type).unwrap();
+                let animation_data = entity.animations.get(&animation.id).unwrap();
+                let image_size = animation_data.image.size();
+                let frame = (animation.time / animation_data.period as f32) as usize;
+                let frame = if animation_data.looped { frame % animation_data.count as usize } else { frame.min(animation_data.count as usize - 1) };
+                let width = image_size.x / animation_data.count as f32;
+                draw_texture_ex(&animation_data.image, position.x, position.y, WHITE, DrawTextureParams {
+                    dest_size: Some(Vec2::new(entity.size.0 as f32, entity.size.1 as f32)),
+                    source: Some(Rect::new(width * frame as f32, 0., width, image_size.y)),
+                    flip_y: animation_data.flip,
+                    ..Default::default()
+                });
             }
         }
 

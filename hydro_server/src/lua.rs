@@ -5,7 +5,7 @@ use immutable_string::ImmutableString;
 use mlua::{AnyUserData, Error, FromLua, Lua, OwnedAnyUserData, UserData, UserDataFields, UserDataMethods, Value};
 use uuid::Uuid;
 
-use hydro_common::EntityAddMessage;
+use hydro_common::{EntityAddMessage, RunningAnimation};
 use hydro_common::pos::{CHUNK_SIZE, TilePosition, Vec2};
 
 use crate::{ChunkTileLayer, Server, ServerPtr};
@@ -153,6 +153,10 @@ impl Entity {
             position: Vec2 { x: position.x as f32, y: position.y as f32 },
             entity_type: self.type_id.to_string(),
             uuid: self.uuid,
+            animation: RunningAnimation {
+                id: "default".to_string(),
+                time: 0.,
+            },
         }
     }
 }
