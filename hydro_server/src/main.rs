@@ -102,10 +102,13 @@ async fn web_server(port: u16, new_client_tx: Sender<ClientConnection>) {
     let html = warp::path::end().map(|| {
         Response::builder().body(include_str!("../host/index.html"))
     });
+    let js_lib = warp::path("mq_js_bundle.js").and(warp::path::end()).map(|| {
+        Response::builder().body(include_str!("../host/mq_js_bundle.js"))
+    });
     let wasm = warp::path("hydro_client.wasm").and(warp::path::end()).map(|| {
         Response::builder().header("content-type", "application/wasm").body(include_bytes!("../host/hydro_client.wasm").to_vec())
     });
-    warp::serve(websocket.or(html).or(wasm)).run(([0, 0, 0, 0], port)).await;
+    warp::serve(websocket.or(html).or(js_lib).or(wasm)).run(([0, 0, 0, 0], port)).await;
 }
 async fn user_connected(ws: warp::ws::WebSocket, new_client_tx: Sender<ClientConnection>) {
     println!("client connect");
