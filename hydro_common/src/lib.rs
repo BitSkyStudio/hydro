@@ -18,7 +18,8 @@ pub enum MessageS2C {
     SetTile(TilePosition, String, u32),
     AddEntity(EntityAddMessage),
     RemoveEntity(Uuid),
-    UpdateEntity(Uuid, Vec2, RunningAnimation),
+    UpdateEntityPosition(Uuid, Vec2),
+    UpdateEntityAnimation(Uuid, RunningAnimation),
     LoadContent(LoadContentMessage),
     CameraInfo(Vec2),
 }

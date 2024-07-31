@@ -1,6 +1,6 @@
-#![feature(int_roundings, async_closure)]
+#![feature(int_roundings, async_closure, cell_update)]
 
-use std::cell::{RefCell, RefMut};
+use std::cell::{Cell, RefCell, RefMut};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
@@ -43,6 +43,7 @@ fn main() {
         entities: RefCell::new(HashMap::new()),
         new_clients: new_clients_rx,
         clients: RefCell::new(HashMap::new()),
+        ticks_passed: Cell::new(0),
     });
     server.lua.set_app_data(server.clone());
 
@@ -53,12 +54,11 @@ fn main() {
     });
 
     let server_start = Instant::now();
-    let mut ticks_passed = 0u32;
     loop {
         {
             let globals = server.lua.globals();
-            globals.set("ticks_passed", ticks_passed).unwrap();
-            globals.set("seconds_passed", server_start.elapsed().as_secs()).unwrap();
+            globals.set("ticks_passed", server.ticks_passed.get()).unwrap();
+            globals.set("seconds_passed", server.ticks_passed.get() as f64 / Server::TPS as f64).unwrap();
         }
         while let Ok(client) = server.new_clients.try_recv() {
             client.sender.send(MessageS2C::LoadContent(LoadContentMessage {
@@ -84,12 +84,12 @@ fn main() {
         }
         server.tick();
 
-        let sleep_time = (ticks_passed as f64 * (1000. / Server::TPS as f64))
+        let sleep_time = (server.ticks_passed.get() as f64 * (1000. / Server::TPS as f64))
             - server_start.elapsed().as_millis() as f64;
         if sleep_time > 0. {
             std::thread::sleep(Duration::from_millis(sleep_time as u64));
         }
-        ticks_passed += 1;
+        server.ticks_passed.update(|val| val + 1);
     }
 }
 async fn web_server(port: u16, new_client_tx: Sender<ClientConnection>) {
@@ -186,7 +186,7 @@ impl InitEnvironment {
         globals.set("register_entity", lua.create_function(|lua, (name, table): (String, Table)| {
             let init_env = lua.app_data_ref::<InitEnvironment>().ok_or(mlua::Error::runtime("this method can only be used during initialization"))?;
             let mut entity_registry = init_env.entity_registry.borrow_mut();
-            entity_registry.register(name.into(), table.into_owned());
+            entity_registry.register(lua, name.into(), table.into_owned());
             Ok(())
         }).unwrap()).unwrap();
     }
@@ -201,6 +201,7 @@ pub struct Server {
     new_clients: Receiver<ClientConnection>,
     clients: RefCell<HashMap<Uuid, OwnedAnyUserData>>,
     lua: Lua,
+    ticks_passed: Cell<u32>,
 }
 impl Server {
     pub const TPS: u8 = 30;
@@ -299,6 +300,7 @@ impl TileSet {
 pub struct EntityType {
     colliders: HashMap<ImmutableString, Collider>,
     data: LuaOwnedTable,
+    data_metatable: LuaOwnedTable,
     animations: HashMap<ImmutableString, AnimationData>,
     size: (f64, f64),
 }
@@ -307,7 +309,7 @@ pub struct EntityRegistry {
     entities: HashMap<ImmutableString, EntityType>,
 }
 impl EntityRegistry {
-    pub fn register(&mut self, id: ImmutableString, data: LuaOwnedTable) {
+    pub fn register(&mut self, lua: &Lua, id: ImmutableString, data: LuaOwnedTable) {
         let colliders: Table = data.to_ref().get("colliders").unwrap();
         data.to_ref().set("colliders", None::<bool>).unwrap();
         let width: f64 = data.to_ref().get("width").unwrap();
@@ -316,6 +318,8 @@ impl EntityRegistry {
         data.to_ref().set("height", None::<bool>).unwrap();
         let animations: Table = data.to_ref().get("animations").unwrap();
         data.to_ref().set("animations", None::<bool>).unwrap();
+        let data_metatable = lua.create_table().unwrap().into_owned();
+        data_metatable.to_ref().set("__index", data.clone()).unwrap();
         self.entities.insert(id, EntityType {
             colliders: colliders.pairs::<String, Table>().filter_map(|collider| match collider {
                 Ok((name, collider)) => Some((name.into(), Collider {
@@ -335,6 +339,7 @@ impl EntityRegistry {
                 Err(_) => None
             }).collect(),
             size: (width, height),
+            data_metatable,
             data,
         });
     }

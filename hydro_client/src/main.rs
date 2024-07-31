@@ -20,6 +20,7 @@ async fn main() {
         chunks: HashMap::new(),
         entities: HashMap::new(),
     };
+    let mut camera_position = Vec2 { x: 0., y: 0. };
     let mut content = None;
     loop {
         for message in connection.read_messages() {
@@ -48,9 +49,13 @@ async fn main() {
                 MessageS2C::RemoveEntity(id) => {
                     world.entities.remove(&id);
                 }
-                MessageS2C::UpdateEntity(id, position, animation) => {
+                MessageS2C::UpdateEntityPosition(id, position) => {
                     if let Some(entity) = world.entities.get_mut(&id) {
                         entity.0 = Vec2::new(position.x, position.y);
+                    }
+                }
+                MessageS2C::UpdateEntityAnimation(id, animation) => {
+                    if let Some(entity) = world.entities.get_mut(&id) {
                         entity.2 = animation;
                     }
                 }
@@ -83,12 +88,15 @@ async fn main() {
                         }).collect(),
                     });
                 }
+                MessageS2C::CameraInfo(position) => {
+                    camera_position = Vec2::new(position.x, position.y);
+                }
             }
         }
         clear_background(RED);
         let zoom = 200.;
         set_camera(&Camera2D {
-            target: Vec2::new(0., 0.),
+            target: camera_position,
             zoom: Vec2::new(1. / (screen_width() / zoom), 1. / (screen_height() / zoom)),
             ..Default::default()
         });

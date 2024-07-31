@@ -67,13 +67,18 @@ impl UserData for LuaTileSet {
         });
         methods.add_method("set_at", |lua, tile_map, (pos, id): (Position, String)| {
             let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
-            let (chunk_position, chunk_offset) = pos.align_to_tile().to_chunk_position();
+            let tile_pos = pos.align_to_tile();
+            let (chunk_position, chunk_offset) = tile_pos.to_chunk_position();
             let mut chunk = server.get_chunk(chunk_position, pos.world);
-            let mut tile_layer = chunk.tile_layers.entry(tile_map.tileset.clone()).or_insert_with(|| ChunkTileLayer::new());
+            let tile_layer = chunk.tile_layers.entry(tile_map.tileset.clone()).or_insert_with(|| ChunkTileLayer::new());
             let tileset = server.tile_sets.get(&tile_map.tileset).ok_or(Error::runtime("tileset doesn't exist"))?;
-            tile_layer.0[chunk_offset.index()] = tileset.tiles.get::<ImmutableString>(&id.into()).ok_or(Error::runtime("tile not found in tileset"))?.id;
+            let tile_id = tileset.tiles.get::<ImmutableString>(&id.into()).ok_or(Error::runtime("tile not found in tileset"))?.id;
+            tile_layer.0[chunk_offset.index()] = tile_id;
             if let Some(tile_data) = tile_layer.1.remove(&chunk_offset) {
                 tile_data.to_ref().set("invalid", true)?;
+            }
+            for viewer in chunk.viewers.borrow().values() {
+                viewer.borrow::<Client>().unwrap().connection.sender.send(MessageS2C::SetTile(tile_pos, tile_map.tileset.to_string(), tile_id)).unwrap()
             }
             Ok(())
         });
@@ -81,7 +86,7 @@ impl UserData for LuaTileSet {
             let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
             let (chunk_position, chunk_offset) = pos.align_to_tile().to_chunk_position();
             let mut chunk = server.get_chunk(chunk_position, pos.world);
-            let mut tile_layer = chunk.tile_layers.entry(tile_map.tileset.clone()).or_insert_with(|| ChunkTileLayer::new());
+            let tile_layer = chunk.tile_layers.entry(tile_map.tileset.clone()).or_insert_with(|| ChunkTileLayer::new());
             let tileset = server.tile_sets.get(&tile_map.tileset).ok_or(Error::runtime("tileset not found"))?;
             let tile_table = tileset.tiles.get(tileset.tile_ids.get(tile_layer.0[chunk_offset.x as usize + (chunk_offset.y as usize * CHUNK_SIZE as usize)] as usize).unwrap()).unwrap().data.clone();
             Ok(tile_layer.1.entry(chunk_offset).or_insert_with(move || {
@@ -108,7 +113,6 @@ impl UserData for Position {
         fields.add_field_method_get("y", |_, pos| { Ok(pos.y) });
         fields.add_field_method_get("world", |_, pos| { Ok(pos.world.to_string()) });
     }
-    fn add_methods<'lua, M: UserDataMethods<'lua, Self>>(methods: &mut M) {}
 }
 impl Position {
     pub fn align_to_tile(&self) -> TilePosition {
@@ -123,42 +127,63 @@ pub struct Collider {
     pub(crate) aabb: AABB,
     pub(crate) mask: u32,
 }
+#[derive(Clone)]
+pub struct EntityAnimation {
+    begin_time: u32,
+    animation: ImmutableString,
+}
+impl EntityAnimation {
+    pub fn running_for(&self, server: &Server) -> f64 {
+        (server.ticks_passed.get() - self.begin_time) as f64 / Server::TPS as f64
+    }
+}
 pub struct Entity {
     pub type_id: ImmutableString,
     pub uuid: Uuid,
     pub position: RefCell<Position>,
     removed: AtomicBool,
+    animation: RefCell<EntityAnimation>,
 }
 impl Entity {
     pub fn new(lua: &Lua, id: ImmutableString, position: Position) -> mlua::Result<OwnedAnyUserData> {
         let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
         let mut chunk = server.get_chunk(position.align_to_tile().to_chunk_position().0, position.world.clone());
         let table = lua.create_table().unwrap().into_owned();
-        let metatable = lua.create_table().unwrap().into_owned();
-        metatable.to_ref().set("__index", server.entity_registry.entities.get(&id).unwrap().data.to_ref()).unwrap();
-        table.to_ref().set_metatable(Some(metatable.to_ref()));
+        table.to_ref().set_metatable(Some(server.entity_registry.entities.get(&id).unwrap().data_metatable.to_ref()));
         let uuid = Uuid::new_v4();
         let user_data = lua.create_userdata(Entity {
             type_id: id,
             uuid,
             position: RefCell::new(position.clone()),
             removed: AtomicBool::new(false),
+            animation: RefCell::new(EntityAnimation {
+                animation: "default".into(),
+                begin_time: server.ticks_passed.get(),
+            }),
         }).unwrap().into_owned();
         user_data.to_ref().set_nth_user_value(2, table).unwrap();
         server.entities.borrow_mut().insert(uuid, user_data.clone());
         chunk.entities.insert(uuid, user_data.clone());
         Ok(user_data)
     }
-    pub fn create_add_message(&self) -> EntityAddMessage {
+    pub fn create_add_message(&self, server: &Server) -> EntityAddMessage {
         let position = self.position.borrow();
+        let animation = self.animation.borrow();
         EntityAddMessage {
             position: Vec2 { x: position.x as f32, y: position.y as f32 },
             entity_type: self.type_id.to_string(),
             uuid: self.uuid,
             animation: RunningAnimation {
-                id: "default".to_string(),
-                time: 0.,
+                id: animation.animation.to_string(),
+                time: animation.running_for(server) as f32,
             },
+        }
+    }
+    fn sync_animations(&self, server: &Server) {
+        let position = self.position.borrow();
+        let animation = self.animation.borrow();
+        for viewer in server.get_chunk(position.align_to_tile().to_chunk_position().0, position.world.clone()).viewers.borrow().values() {
+            viewer.borrow::<Client>().unwrap().connection.sender.send(MessageS2C::UpdateEntityAnimation(self.uuid, RunningAnimation { id: animation.animation.to_string(), time: animation.running_for(server) as f32 })).unwrap();
         }
     }
 }
@@ -178,10 +203,34 @@ impl UserData for Entity {
             let old_chunk_position = old_position.align_to_tile().to_chunk_position().0;
             let new_chunk_position = position.align_to_tile().to_chunk_position().0;
             if old_position.world != position.world || old_chunk_position != new_chunk_position {
-                server.get_chunk(old_chunk_position, old_position.world).entities.remove(&entity.uuid);
-                server.get_chunk(new_chunk_position, position.world.clone()).entities.insert(entity.uuid, entity_obj);
+                let mut old_chunk = server.get_chunk(old_chunk_position, old_position.world);
+                old_chunk.entities.remove(&entity.uuid);
+                let mut new_chunk = server.get_chunk(new_chunk_position, position.world.clone());
+                new_chunk.entities.insert(entity.uuid, entity_obj);
+                let old_viewers: HashSet<Uuid> = old_chunk.viewers.borrow().keys().cloned().collect();
+                let new_viewers: HashSet<Uuid> = new_chunk.viewers.borrow().keys().cloned().collect();
+                for new_viewer in new_viewers.difference(&old_viewers) {
+                    new_chunk.viewers.borrow().get(new_viewer).unwrap().borrow::<Client>().unwrap().connection.sender.send(MessageS2C::AddEntity(entity.create_add_message(&server))).unwrap();
+                }
+                for old_viewer in old_viewers.difference(&new_viewers) {
+                    old_chunk.viewers.borrow().get(old_viewer).unwrap().borrow::<Client>().unwrap().connection.sender.send(MessageS2C::RemoveEntity(entity.uuid.clone())).unwrap();
+                }
             }
             *entity.position.borrow_mut() = position;
+            Ok(())
+        });
+        fields.add_field_method_set("animation", |lua, entity, animation: String| {
+            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            let animation_id = animation.into();
+            if server.entity_registry.entities.get(&entity.type_id).unwrap().animations.contains_key(&animation_id) {
+                return Err(Error::runtime("animation doesn't exist"))?;
+            }
+            {
+                let mut animation = entity.animation.borrow_mut();
+                animation.animation = animation_id;
+                animation.begin_time = server.ticks_passed.get();
+            }
+            entity.sync_animations(&server);
             Ok(())
         });
         fields.add_field_method_get("id", |lua, entity| {
@@ -193,17 +242,20 @@ impl UserData for Entity {
     }
     fn add_methods<'lua, M: UserDataMethods<'lua, Self>>(methods: &mut M) {
         methods.add_method("remove", |lua, entity, args: ()| {
-            let mut server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
             server.entities.borrow_mut().remove(&entity.uuid);
             let position = entity.position.borrow().clone();
             let chunk = position.align_to_tile().to_chunk_position().0;
             let mut chunk = server.get_chunk(chunk, position.world);
             chunk.entities.remove(&entity.uuid);
             entity.removed.load(Ordering::SeqCst);
+            for viewer in chunk.viewers.borrow().values() {
+                viewer.borrow::<Client>().unwrap().connection.sender.send(MessageS2C::RemoveEntity(entity.uuid)).unwrap();
+            }
             Ok(())
         });
         methods.add_method("get_collider", |lua, entity, name: String| {
-            let mut server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
             let aabb = server.entity_registry.entities.get(&entity.type_id).unwrap().colliders.get::<ImmutableString>(&name.into()).unwrap().aabb;
             Ok(LuaAABB {
                 aabb: aabb.offset(&*entity.position.borrow()),
@@ -319,12 +371,15 @@ pub struct Client {
 }
 impl Client {
     pub fn new(lua: &Lua, connection: ClientConnection) -> mlua::Result<OwnedAnyUserData> {
-        lua.create_userdata(Client {
+        let user_data = lua.create_userdata(Client {
             connection,
             camera: ClientCameraType::None,
             id: Uuid::new_v4(),
             closed: false,
-        }).map(|client| client.into_owned())
+        }).unwrap().into_owned();
+        let table = lua.create_table().unwrap().into_owned();
+        user_data.to_ref().set_nth_user_value(2, table).unwrap();
+        Ok(user_data)
     }
     pub fn set_camera(&mut self, server: &Server, lua_ref: OwnedAnyUserData, new_camera: ClientCameraType) {
         let old = self.camera.get_loaded_chunks();
@@ -340,7 +395,7 @@ impl Client {
                 new_chunk.viewers.borrow_mut().insert(self.id, lua_ref.clone());
                 self.connection.sender.send(MessageS2C::LoadChunk(*new_chunk_position,
                                                                   new_chunk.tile_layers.iter().map(|(key, value)| (key.to_string(), value.0.clone())).collect(),
-                                                                  new_chunk.entities.values().map(|entity| entity.borrow::<Entity>().unwrap().create_add_message()).collect(),
+                                                                  new_chunk.entities.values().map(|entity| entity.borrow::<Entity>().unwrap().create_add_message(server)).collect(),
                 )).unwrap();
             }
         } else {
@@ -354,7 +409,7 @@ impl Client {
                 new_chunk.viewers.borrow_mut().insert(self.id, lua_ref.clone());
                 self.connection.sender.send(MessageS2C::LoadChunk(new_chunk_position,
                                                                   new_chunk.tile_layers.iter().map(|(key, value)| (key.to_string(), value.0.clone())).collect(),
-                                                                  new_chunk.entities.values().map(|entity| entity.borrow::<Entity>().unwrap().create_add_message()).collect(),
+                                                                  new_chunk.entities.values().map(|entity| entity.borrow::<Entity>().unwrap().create_add_message(server)).collect(),
                 )).unwrap();
             }
         }
@@ -402,6 +457,12 @@ impl UserData for Client {
             let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
             client.borrow_mut::<Client>().unwrap().set_camera(&server, client.clone(), ClientCameraType::None);
             Ok(())
+        });
+        methods.add_meta_function("__index", |lua, (client, key): (AnyUserData, Value)| {
+            client.nth_user_value::<Table>(2).unwrap().get::<Value, Value>(key)
+        });
+        methods.add_meta_function("__newindex", |lua, (client, key, value): (AnyUserData, Value, Value)| {
+            client.nth_user_value::<Table>(2).unwrap().set(key, value)
         });
     }
 }
