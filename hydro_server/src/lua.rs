@@ -1,14 +1,16 @@
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::TryRecvError;
 
 use immutable_string::ImmutableString;
-use mlua::{AnyUserData, Error, FromLua, Lua, OwnedAnyUserData, UserData, UserDataFields, UserDataMethods, Value};
+use mlua::{AnyUserData, Error, FromLua, Lua, OwnedAnyUserData, Table, UserData, UserDataFields, UserDataMethods, Value};
 use uuid::Uuid;
 
-use hydro_common::{EntityAddMessage, RunningAnimation};
-use hydro_common::pos::{CHUNK_SIZE, TilePosition, Vec2};
+use hydro_common::{EntityAddMessage, MessageS2C, RunningAnimation};
+use hydro_common::pos::{CHUNK_SIZE, ChunkPosition, TilePosition, Vec2};
 
-use crate::{ChunkTileLayer, Server, ServerPtr};
+use crate::{ChunkTileLayer, ClientConnection, Server, ServerPtr};
 use crate::util::AABB;
 
 pub fn init_lua_functions(lua: &Lua) {
@@ -122,9 +124,9 @@ pub struct Collider {
     pub(crate) mask: u32,
 }
 pub struct Entity {
-    type_id: ImmutableString,
-    uuid: Uuid,
-    position: RefCell<Position>,
+    pub type_id: ImmutableString,
+    pub uuid: Uuid,
+    pub position: RefCell<Position>,
     removed: AtomicBool,
 }
 impl Entity {
@@ -188,9 +190,6 @@ impl UserData for Entity {
         fields.add_field_method_get("removed", |lua, entity| {
             Ok(entity.removed.load(Ordering::SeqCst))
         });
-        fields.add_field_function_get("data", |lua, entity: AnyUserData| {
-            entity.nth_user_value::<Value>(2)
-        })
     }
     fn add_methods<'lua, M: UserDataMethods<'lua, Self>>(methods: &mut M) {
         methods.add_method("remove", |lua, entity, args: ()| {
@@ -210,6 +209,12 @@ impl UserData for Entity {
                 aabb: aabb.offset(&*entity.position.borrow()),
                 world: entity.position.borrow().world.clone(),
             })
+        });
+        methods.add_meta_function("__index", |lua, (entity, key): (AnyUserData, Value)| {
+            entity.nth_user_value::<Table>(2).unwrap().get::<Value, Value>(key)
+        });
+        methods.add_meta_function("__newindex", |lua, (entity, key, value): (AnyUserData, Value, Value)| {
+            entity.nth_user_value::<Table>(2).unwrap().set(key, value)
         });
     }
 }
@@ -303,5 +308,128 @@ impl UserData for LuaAABB {
             //todo: tiles
             Ok(collision_time)
         });
+    }
+}
+
+pub struct Client {
+    connection: ClientConnection,
+    camera: ClientCameraType,
+    closed: bool,
+    pub id: Uuid,
+}
+impl Client {
+    pub fn new(lua: &Lua, connection: ClientConnection) -> mlua::Result<OwnedAnyUserData> {
+        lua.create_userdata(Client {
+            connection,
+            camera: ClientCameraType::None,
+            id: Uuid::new_v4(),
+            closed: false,
+        }).map(|client| client.into_owned())
+    }
+    pub fn set_camera(&mut self, server: &Server, lua_ref: OwnedAnyUserData, new_camera: ClientCameraType) {
+        let old = self.camera.get_loaded_chunks();
+        let new = new_camera.get_loaded_chunks();
+        if old.0 == new.0 {
+            for old_chunk_position in old.1.difference(&new.1) {
+                let old_chunk = server.get_chunk(*old_chunk_position, old.0.clone());
+                old_chunk.viewers.borrow_mut().remove(&self.id);
+                self.connection.sender.send(MessageS2C::UnloadChunk(*old_chunk_position, old_chunk.entities.keys().cloned().collect())).unwrap();
+            }
+            for new_chunk_position in new.1.difference(&old.1) {
+                let new_chunk = server.get_chunk(*new_chunk_position, new.0.clone());
+                new_chunk.viewers.borrow_mut().insert(self.id, lua_ref.clone());
+                self.connection.sender.send(MessageS2C::LoadChunk(*new_chunk_position,
+                                                                  new_chunk.tile_layers.iter().map(|(key, value)| (key.to_string(), value.0.clone())).collect(),
+                                                                  new_chunk.entities.values().map(|entity| entity.borrow::<Entity>().unwrap().create_add_message()).collect(),
+                )).unwrap();
+            }
+        } else {
+            for old_chunk_position in old.1 {
+                let old_chunk = server.get_chunk(old_chunk_position, old.0.clone());
+                old_chunk.viewers.borrow_mut().remove(&self.id);
+                self.connection.sender.send(MessageS2C::UnloadChunk(old_chunk_position, old_chunk.entities.keys().cloned().collect())).unwrap();
+            }
+            for new_chunk_position in new.1 {
+                let new_chunk = server.get_chunk(new_chunk_position, new.0.clone());
+                new_chunk.viewers.borrow_mut().insert(self.id, lua_ref.clone());
+                self.connection.sender.send(MessageS2C::LoadChunk(new_chunk_position,
+                                                                  new_chunk.tile_layers.iter().map(|(key, value)| (key.to_string(), value.0.clone())).collect(),
+                                                                  new_chunk.entities.values().map(|entity| entity.borrow::<Entity>().unwrap().create_add_message()).collect(),
+                )).unwrap();
+            }
+        }
+        let camera_position = new_camera.get_position();
+        if let Some(camera_position) = camera_position {
+            self.connection.sender.send(MessageS2C::CameraInfo(Vec2 { x: camera_position.x as f32, y: camera_position.y as f32 })).unwrap();
+        }
+        self.camera = new_camera;
+    }
+    pub fn tick(&mut self, server: &Server, lua_ref: OwnedAnyUserData) {
+        loop {
+            match self.connection.receiver.try_recv() {
+                Ok(message) => {
+                    match message {}
+                }
+                Err(TryRecvError::Disconnected) => {
+                    self.closed = true;
+                    println!("disconnected");
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+            }
+        }
+        match &self.camera {
+            ClientCameraType::Entity(_) => {
+                self.set_camera(server, lua_ref.clone(), self.camera.clone())
+            }
+            _ => {}
+        }
+    }
+}
+impl UserData for Client {
+    fn add_methods<'lua, M: UserDataMethods<'lua, Self>>(methods: &mut M) {
+        methods.add_function("set_camera_position", |lua, (client, pos): (OwnedAnyUserData, Position)| {
+            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            client.borrow_mut::<Client>().unwrap().set_camera(&server, client.clone(), ClientCameraType::Position(pos));
+            Ok(())
+        });
+        methods.add_function("set_camera_entity", |lua, (client, entity): (OwnedAnyUserData, OwnedAnyUserData)| {
+            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            client.borrow_mut::<Client>().unwrap().set_camera(&server, client.clone(), ClientCameraType::Entity(entity));
+            Ok(())
+        });
+        methods.add_function("remove_camera", |lua, client: OwnedAnyUserData| {
+            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            client.borrow_mut::<Client>().unwrap().set_camera(&server, client.clone(), ClientCameraType::None);
+            Ok(())
+        });
+    }
+}
+#[derive(Clone)]
+pub enum ClientCameraType {
+    None,
+    Position(Position),
+    Entity(OwnedAnyUserData),
+}
+impl ClientCameraType {
+    pub fn get_position(&self) -> Option<Position> {
+        match self {
+            ClientCameraType::None => return None,
+            ClientCameraType::Position(position) => Some(position.clone()),
+            ClientCameraType::Entity(entity) => {
+                let entity = entity.borrow::<Entity>().unwrap();
+                let pos = entity.position.borrow().clone();
+                Some(pos)
+            }
+        }
+    }
+    pub fn get_loaded_chunks(&self) -> (ImmutableString, HashSet<ChunkPosition>) {
+        let position = match self.get_position() {
+            Some(position) => position,
+            None => return ("".into(), HashSet::new()),
+        };
+        let base_chunk_position = position.align_to_tile().to_chunk_position().0;
+        let load_radius = 4;
+        (position.world.clone(), ((-load_radius)..=load_radius).map(|x| ((-load_radius)..=load_radius).map(move |y| ChunkPosition { x: base_chunk_position.x + x, y: base_chunk_position.y + y })).flatten().collect())
     }
 }

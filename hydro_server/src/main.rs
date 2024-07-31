@@ -21,7 +21,7 @@ use warp::ws::Message;
 use hydro_common::{AnimationData, EntityContentMessage, LoadContentMessage, MessageC2S, MessageS2C, TileSetContentMessage};
 use hydro_common::pos::{CHUNK_SIZE, ChunkOffset, ChunkPosition};
 
-use crate::lua::{Collider, Entity};
+use crate::lua::{Client, Collider};
 use crate::util::AABB;
 
 mod util;
@@ -42,7 +42,7 @@ fn main() {
         entity_registry: init_env.entity_registry.into_inner(),
         entities: RefCell::new(HashMap::new()),
         new_clients: new_clients_rx,
-        clients: RefCell::new(Vec::new()),
+        clients: RefCell::new(HashMap::new()),
     });
     server.lua.set_app_data(server.clone());
 
@@ -61,10 +61,7 @@ fn main() {
             globals.set("seconds_passed", server_start.elapsed().as_secs()).unwrap();
         }
         while let Ok(client) = server.new_clients.try_recv() {
-            let client = Client {
-                connection: client,
-            };
-            client.connection.sender.send(MessageS2C::LoadContent(LoadContentMessage {
+            client.sender.send(MessageS2C::LoadContent(LoadContentMessage {
                 tilesets: server.tile_sets.iter().map(|(key, value)| (key.to_string(), TileSetContentMessage {
                     asset: value.asset.0.clone(),
                     size: value.asset.1,
@@ -77,13 +74,13 @@ fn main() {
                     })
                 }).collect(),
             })).unwrap();
-            for (position, chunk) in server.worlds.borrow().values().map(|world| world.chunks.iter()).flatten() {
-                client.connection.sender.send(MessageS2C::LoadChunk(*position,
-                                                                    chunk.tile_layers.iter().map(|(key, value)| (key.to_string(), value.0.clone())).collect(),
-                                                                    chunk.entities.values().map(|entity| entity.borrow::<Entity>().unwrap().create_add_message()).collect(),
-                )).unwrap();
-            }
-            server.clients.borrow_mut().push(client);
+            let client = Client::new(&server.lua, client).unwrap();
+            let id = { client.borrow::<Client>().unwrap().id.clone() };
+            server.clients.borrow_mut().insert(id, client.clone());
+
+            let table = server.lua.create_table().unwrap();
+            table.set("client", client).unwrap();
+            server.call_event("client_join".into(), table.into_owned()).unwrap();
         }
         server.tick();
 
@@ -139,7 +136,6 @@ async fn user_connected(ws: warp::ws::WebSocket, new_client_tx: Sender<ClientCon
         };
         client_sender_c2s.send(bincode::serde::decode_from_slice(msg.as_bytes(), config::standard()).unwrap().0).unwrap();
     }
-    //todo: disconnect
     println!("disconnect")
 }
 pub struct InitEnvironment {
@@ -195,9 +191,7 @@ impl InitEnvironment {
         }).unwrap()).unwrap();
     }
 }
-pub struct Client {
-    connection: ClientConnection,
-}
+
 pub struct Server {
     worlds: RefCell<HashMap<ImmutableString, World>>,
     tile_sets: HashMap<ImmutableString, TileSet>,
@@ -205,7 +199,7 @@ pub struct Server {
     event_handlers: HashMap<ImmutableString, Vec<LuaOwnedFunction>>,
     entities: RefCell<HashMap<Uuid, OwnedAnyUserData>>,
     new_clients: Receiver<ClientConnection>,
-    clients: RefCell<Vec<Client>>,
+    clients: RefCell<HashMap<Uuid, OwnedAnyUserData>>,
     lua: Lua,
 }
 impl Server {
@@ -218,6 +212,9 @@ impl Server {
     }
     pub fn tick(&self) {
         self.call_event("tick".into(), self.lua.create_table().unwrap().into_owned()).unwrap();
+        for client in self.clients.borrow().values() {
+            client.borrow_mut::<Client>().unwrap().tick(self, client.clone());
+        }
     }
     pub fn get_chunk(&self, position: ChunkPosition, world: ImmutableString) -> RefMut<Chunk> {
         RefMut::map(self.worlds.borrow_mut(), |worlds| {
@@ -246,12 +243,14 @@ impl World {
 pub struct Chunk {
     tile_layers: HashMap<ImmutableString, ChunkTileLayer>,
     entities: HashMap<Uuid, OwnedAnyUserData>,
+    viewers: RefCell<HashMap<Uuid, OwnedAnyUserData>>,
 }
 impl Chunk {
     pub fn new() -> Self {
         Chunk {
             tile_layers: HashMap::new(),
             entities: HashMap::new(),
+            viewers: RefCell::new(HashMap::new()),
         }
     }
 }

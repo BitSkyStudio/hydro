@@ -20,6 +20,7 @@ pub enum MessageS2C {
     RemoveEntity(Uuid),
     UpdateEntity(Uuid, Vec2, RunningAnimation),
     LoadContent(LoadContentMessage),
+    CameraInfo(Vec2),
 }
 #[derive(Serialize, Deserialize)]
 pub struct EntityAddMessage {
