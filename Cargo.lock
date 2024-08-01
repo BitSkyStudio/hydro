@@ -579,6 +579,7 @@ dependencies = [
  "hydro_common",
  "macroquad",
  "quad-net",
+ "sapp-jsutils",
  "uuid",
 ]
 

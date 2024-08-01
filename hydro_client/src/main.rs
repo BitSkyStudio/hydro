@@ -5,6 +5,7 @@ use std::net::ToSocketAddrs;
 use bincode::config;
 use macroquad::prelude::*;
 use quad_net::web_socket::WebSocket;
+use sapp_jsutils::JsObject;
 use uuid::Uuid;
 
 use hydro_common::{AnimationData, EntityAddMessage, MessageC2S, MessageS2C, PlayerInputMessage, RunningAnimation};
@@ -62,6 +63,7 @@ async fn main() {
                 }
                 MessageS2C::LoadContent(content_msg) => {
                     connected = true;
+                    unsafe { set_title_name(JsObject::string(content_msg.name.as_str())); }
                     content = Some(Content {
                         tilesets: content_msg.tilesets.into_iter().map(|(key, value)| {
                             let texture = Texture2D::from_file_with_format(value.asset.as_slice(), Some(ImageFormat::Png));
@@ -201,4 +203,7 @@ impl Connection {
         }
         messages
     }
+}
+extern "C" {
+    fn set_title_name(name: JsObject);
 }

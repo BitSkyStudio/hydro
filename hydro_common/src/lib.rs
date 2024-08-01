@@ -40,6 +40,7 @@ pub struct EntityAddMessage {
 }
 #[derive(Serialize, Deserialize)]
 pub struct LoadContentMessage {
+    pub name: String,
     pub tilesets: HashMap<String, TileSetContentMessage>,
     pub entities: HashMap<String, EntityContentMessage>,
 }

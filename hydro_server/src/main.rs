@@ -62,6 +62,7 @@ fn main() {
         }
         while let Ok(client) = server.new_clients.try_recv() {
             client.sender.send(MessageS2C::LoadContent(LoadContentMessage {
+                name: "hydro".to_string(),
                 tilesets: server.tile_sets.iter().map(|(key, value)| (key.to_string(), TileSetContentMessage {
                     asset: value.asset.0.clone(),
                     size: value.asset.1,
