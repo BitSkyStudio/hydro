@@ -8,6 +8,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use bincode::config;
+use bincode::error::DecodeError;
 use futures::{FutureExt, StreamExt};
 use immutable_string::ImmutableString;
 use mlua::{IntoLuaMulti, Lua, OwnedAnyUserData, Table};
@@ -22,7 +23,7 @@ use warp::ws::Message;
 use hydro_common::{AnimationData, EntityContentMessage, LoadContentMessage, MessageC2S, MessageS2C, TileSetContentMessage};
 use hydro_common::pos::{CHUNK_SIZE, ChunkOffset, ChunkPosition};
 
-use crate::lua::{Client, Collider};
+use crate::lua::{Client, Collider, Position};
 use crate::util::AABB;
 
 mod util;
@@ -137,7 +138,13 @@ async fn user_connected(ws: warp::ws::WebSocket, new_client_tx: Sender<ClientCon
                 break;
             }
         };
-        client_sender_c2s.send(bincode::serde::decode_from_slice(msg.as_bytes(), config::standard()).unwrap().0).unwrap();
+        client_sender_c2s.send(match bincode::serde::decode_from_slice::<MessageC2S, _>(msg.as_bytes(), config::standard()){
+            Ok(message) => message.0,
+            Err(error) => {
+                println!("decode error: {}", error);
+                break;
+            }
+        }).unwrap();
     }
     println!("disconnect")
 }
@@ -264,7 +271,17 @@ impl Server {
     }
     pub fn get_chunk(&self, position: ChunkPosition, world: ImmutableString) -> RefMut<Chunk> {
         RefMut::map(self.worlds.borrow_mut(), |worlds| {
-            worlds.entry(world).or_insert_with(World::new).get_chunk(position)
+            worlds.entry(world.clone()).or_insert_with(World::new).chunks.entry(position.clone()).or_insert_with(|| {
+                self.schedule_task(move |server|{
+                    server.call_event("load_chunk".into(), Position{
+                        x: (position.x as i32 * CHUNK_SIZE) as f64,
+                        y: (position.y as i32 * CHUNK_SIZE) as f64,
+                        world: world.clone()
+                    }).unwrap();
+                    None
+                }, 0.);
+                Chunk::new()
+            })
         })
     }
 }
@@ -281,9 +298,6 @@ impl World {
         World {
             chunks: HashMap::new()
         }
-    }
-    pub fn get_chunk(&mut self, position: ChunkPosition) -> &mut Chunk {
-        self.chunks.entry(position).or_insert_with(|| Chunk::new())
     }
 }
 pub struct Chunk {

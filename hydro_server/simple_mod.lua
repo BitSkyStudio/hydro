@@ -57,3 +57,6 @@ register_event("tick", function()
         end
     end
 end)
+register_event("load_chunk", function(position)
+    print(position.chunk_x..":"..position.chunk_y.."-"..position.world)
+end)

@@ -183,6 +183,8 @@ impl UserData for Position {
         fields.add_field_method_get("x", |_, pos| { Ok(pos.x) });
         fields.add_field_method_get("y", |_, pos| { Ok(pos.y) });
         fields.add_field_method_get("world", |_, pos| { Ok(pos.world.to_string()) });
+        fields.add_field_method_get("chunk_x", |_, pos| { Ok(pos.align_to_tile().to_chunk_position().0.x) });
+        fields.add_field_method_get("chunk_y", |_, pos| { Ok(pos.align_to_tile().to_chunk_position().0.y) });
     }
 }
 impl Position {
@@ -507,7 +509,6 @@ impl Client {
                 }
                 Err(TryRecvError::Disconnected) => {
                     self.closed = true;
-                    println!("disconnected");
                     break;
                 }
                 Err(TryRecvError::Empty) => break,
