@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::TryRecvError;
 
 use immutable_string::ImmutableString;
-use mlua::{AnyUserData, Error, FromLua, Lua, OwnedAnyUserData, Table, UserData, UserDataFields, UserDataMethods, Value};
+use mlua::{AnyUserData, Error, FromLua, Function, Lua, OwnedAnyUserData, OwnedFunction, Table, UserData, UserDataFields, UserDataMethods, Value};
 use uuid::Uuid;
 
 use hydro_common::{EntityAddMessage, MessageC2S, MessageS2C, PlayerInputMessage, RunningAnimation};
@@ -53,6 +53,19 @@ pub fn init_lua_functions(lua: &Lua) {
         let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
         let clients = server.clients.borrow();
         Ok(clients.iter().map(|(key,value)|(key.to_string(), value.clone())).collect::<HashMap<String, OwnedAnyUserData>>())
+    }).unwrap()).unwrap();
+    globals.set("schedule", lua.create_function(|lua, (task, after): (OwnedFunction,f64)| {
+        let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+        server.schedule_task(move |server|{
+            let reschedule = task.call::<(),Value>(()).unwrap();
+            match reschedule{
+                Value::Nil => None,
+                Value::Integer(value) => Some(value as f64),
+                Value::Number(value) => Some(value as f64),
+                _ => panic!(),
+            }
+        }, after);
+        Ok(())
     }).unwrap()).unwrap();
 
     {

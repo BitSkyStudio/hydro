@@ -1,7 +1,8 @@
-#![feature(int_roundings, async_closure, cell_update, hash_extract_if)]
+#![feature(int_roundings, async_closure, cell_update, hash_extract_if, fn_traits)]
 
 use std::cell::{Cell, RefCell, RefMut};
-use std::collections::HashMap;
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
@@ -44,6 +45,7 @@ fn main() {
         new_clients: new_clients_rx,
         clients: RefCell::new(HashMap::new()),
         ticks_passed: Cell::new(0),
+        task_queue: RefCell::new(BinaryHeap::new())
     });
     server.lua.set_app_data(server.clone());
 
@@ -192,7 +194,26 @@ impl InitEnvironment {
         }).unwrap()).unwrap();
     }
 }
-
+pub struct Task{
+    run_on: u32,
+    task: Box<dyn Fn(&Server) -> Option<f64>>,
+}
+impl PartialEq<Self> for Task {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+impl PartialOrd<Self> for Task {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Eq for Task {}
+impl Ord for Task{
+    fn cmp(&self, other: &Self) -> Ordering {
+        other.run_on.cmp(&self.run_on)
+    }
+}
 pub struct Server {
     worlds: RefCell<HashMap<ImmutableString, World>>,
     tile_sets: HashMap<ImmutableString, TileSet>,
@@ -203,6 +224,7 @@ pub struct Server {
     clients: RefCell<HashMap<Uuid, OwnedAnyUserData>>,
     lua: Lua,
     ticks_passed: Cell<u32>,
+    task_queue: RefCell<BinaryHeap<Task>>
 }
 impl Server {
     pub const TPS: u8 = 30;
@@ -220,6 +242,25 @@ impl Server {
         for client in self.clients.borrow_mut().extract_if(|id, client|client.borrow::<Client>().unwrap().closed){
             self.call_event("leave".into(), client.1).unwrap();
         }
+        while let Some(mut task) = self.get_next_scheduled_task(){
+            if let Some(reschedule) = task.task.call((self,)){
+                self.schedule_task(task.task, reschedule);
+            }
+        }
+    }
+    fn get_next_scheduled_task(&self) -> Option<Task>{
+        let mut task_queue = self.task_queue.borrow_mut();
+        if task_queue.peek()?.run_on <= self.ticks_passed.get() {
+            task_queue.pop()
+        } else {
+            None
+        }
+    }
+    pub fn schedule_task<T: Fn(&Server) -> Option<f64> + 'static>(&self, task: T, after: f64){
+        self.task_queue.borrow_mut().push(Task{
+            run_on: self.ticks_passed.get() + (after*Server::TPS as f64).ceil() as u32,
+            task: Box::new(task)
+        });
     }
     pub fn get_chunk(&self, position: ChunkPosition, world: ImmutableString) -> RefMut<Chunk> {
         RefMut::map(self.worlds.borrow_mut(), |worlds| {
