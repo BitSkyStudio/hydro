@@ -306,6 +306,22 @@ impl UserData for Entity {
             entity.sync_animations(&server);
             Ok(())
         });
+        fields.add_field_method_get("animation", |lua, entity|{
+            Ok(entity.animation.borrow().animation.to_string())
+        });
+        fields.add_field_method_set("animation_time", |lua, entity, time: f64|{
+            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            {
+                let mut animation = entity.animation.borrow_mut();
+                animation.begin_time = server.ticks_passed.get()-(time*Server::TPS as f64) as u32;
+            }
+            entity.sync_animations(&server);
+            Ok(())
+        });
+        fields.add_field_method_get("animation_time", |lua, entity|{
+            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            Ok((server.ticks_passed.get()-entity.animation.borrow().begin_time) as f64/Server::TPS as f64)
+        });
         fields.add_field_method_get("id", |lua, entity| {
             Ok(entity.uuid.to_string())
         });
