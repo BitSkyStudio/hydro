@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::TryRecvError;
 
@@ -7,7 +7,7 @@ use immutable_string::ImmutableString;
 use mlua::{AnyUserData, Error, FromLua, Lua, OwnedAnyUserData, Table, UserData, UserDataFields, UserDataMethods, Value};
 use uuid::Uuid;
 
-use hydro_common::{EntityAddMessage, MessageS2C, RunningAnimation};
+use hydro_common::{EntityAddMessage, MessageC2S, MessageS2C, PlayerInputMessage, RunningAnimation};
 use hydro_common::pos::{CHUNK_SIZE, ChunkPosition, TilePosition, Vec2};
 
 use crate::{ChunkTileLayer, ClientConnection, Server, ServerPtr};
@@ -43,6 +43,64 @@ pub fn init_lua_functions(lua: &Lua) {
         let id = server.entities.borrow().get(&uuid).cloned();
         Ok(id)
     }).unwrap()).unwrap();
+    globals.set("get_client", lua.create_function(|lua, (id, ): (String,)| {
+        let uuid = Uuid::parse_str(id.as_str()).map_err(|_| Error::runtime("malformed uuid"))?;
+        let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+        let id = server.clients.borrow().get(&uuid).cloned();
+        Ok(id)
+    }).unwrap()).unwrap();
+    globals.set("get_clients", lua.create_function(|lua, ()| {
+        let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+        let clients = server.clients.borrow();
+        Ok(clients.iter().map(|(key,value)|(key.to_string(), value.clone())).collect::<HashMap<String, OwnedAnyUserData>>())
+    }).unwrap()).unwrap();
+
+    {
+        let keys = lua.create_table().unwrap();
+        keys.set("0", 0x30).unwrap();
+        keys.set("1", 0x31).unwrap();
+        keys.set("2", 0x32).unwrap();
+        keys.set("3", 0x33).unwrap();
+        keys.set("4", 0x34).unwrap();
+        keys.set("5", 0x35).unwrap();
+        keys.set("6", 0x36).unwrap();
+        keys.set("7", 0x37).unwrap();
+        keys.set("8", 0x38).unwrap();
+        keys.set("9", 0x39).unwrap();
+        keys.set("a", 0x41).unwrap();
+        keys.set("b", 0x42).unwrap();
+        keys.set("c", 0x43).unwrap();
+        keys.set("d", 0x44).unwrap();
+        keys.set("e", 0x45).unwrap();
+        keys.set("f", 0x46).unwrap();
+        keys.set("g", 0x47).unwrap();
+        keys.set("h", 0x48).unwrap();
+        keys.set("i", 0x49).unwrap();
+        keys.set("j", 0x4a).unwrap();
+        keys.set("k", 0x4b).unwrap();
+        keys.set("l", 0x4c).unwrap();
+        keys.set("m", 0x4d).unwrap();
+        keys.set("n", 0x4e).unwrap();
+        keys.set("o", 0x4f).unwrap();
+        keys.set("p", 0x50).unwrap();
+        keys.set("q", 0x51).unwrap();
+        keys.set("r", 0x52).unwrap();
+        keys.set("s", 0x53).unwrap();
+        keys.set("t", 0x54).unwrap();
+        keys.set("u", 0x55).unwrap();
+        keys.set("v", 0x56).unwrap();
+        keys.set("w", 0x57).unwrap();
+        keys.set("x", 0x58).unwrap();
+        keys.set("y", 0x59).unwrap();
+        keys.set("z", 0x5a).unwrap();
+        keys.set("right", 0xff53).unwrap();
+        keys.set("left", 0xff51).unwrap();
+        keys.set("down", 0xff54).unwrap();
+        keys.set("up", 0xff52).unwrap();
+        keys.set("lshift", 0xffe1).unwrap();
+        keys.set("rshift", 0xffe2).unwrap();
+        globals.set("keys", keys).unwrap();
+    }
 }
 
 pub struct LuaTileSet {
@@ -366,8 +424,9 @@ impl UserData for LuaAABB {
 pub struct Client {
     connection: ClientConnection,
     camera: ClientCameraType,
-    closed: bool,
+    pub(crate) closed: bool,
     pub id: Uuid,
+    player_input: PlayerInputMessage,
 }
 impl Client {
     pub fn new(lua: &Lua, connection: ClientConnection) -> mlua::Result<OwnedAnyUserData> {
@@ -376,6 +435,7 @@ impl Client {
             camera: ClientCameraType::None,
             id: Uuid::new_v4(),
             closed: false,
+            player_input: PlayerInputMessage::default(),
         }).unwrap().into_owned();
         let table = lua.create_table().unwrap().into_owned();
         user_data.to_ref().set_nth_user_value(2, table).unwrap();
@@ -420,10 +480,17 @@ impl Client {
         self.camera = new_camera;
     }
     pub fn tick(&mut self, server: &Server, lua_ref: OwnedAnyUserData) {
+        self.player_input = PlayerInputMessage::default();
         loop {
             match self.connection.receiver.try_recv() {
                 Ok(message) => {
-                    match message {}
+                    match message {
+                        MessageC2S::PlayerInput(mut player_input) => {
+                            self.player_input.down = player_input.down;
+                            self.player_input.pressed.extend(player_input.pressed.drain());
+                            self.player_input.released.extend(player_input.released.drain());
+                        }
+                    }
                 }
                 Err(TryRecvError::Disconnected) => {
                     self.closed = true;
@@ -457,6 +524,15 @@ impl UserData for Client {
             let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
             client.borrow_mut::<Client>().unwrap().set_camera(&server, client.clone(), ClientCameraType::None);
             Ok(())
+        });
+        methods.add_method("is_key_down", |lua, client, key: u16|{
+            Ok(client.player_input.down.contains(&key))
+        });
+        methods.add_method("is_key_pressed", |lua, client, key: u16|{
+            Ok(client.player_input.pressed.contains(&key))
+        });
+        methods.add_method("is_key_released", |lua, client, key: u16|{
+            Ok(client.player_input.released.contains(&key))
         });
         methods.add_meta_function("__index", |lua, (client, key): (AnyUserData, Value)| {
             client.nth_user_value::<Table>(2).unwrap().get::<Value, Value>(key)

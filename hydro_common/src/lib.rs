@@ -1,6 +1,6 @@
 #![feature(int_roundings)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -10,7 +10,15 @@ use crate::pos::{ChunkPosition, TilePosition, Vec2};
 pub mod pos;
 
 #[derive(Serialize, Deserialize)]
-pub enum MessageC2S {}
+pub enum MessageC2S {
+    PlayerInput(PlayerInputMessage)
+}
+#[derive(Serialize, Deserialize, Default)]
+pub struct PlayerInputMessage {
+    pub down: HashSet<u16>,
+    pub pressed: HashSet<u16>,
+    pub released: HashSet<u16>,
+}
 #[derive(Serialize, Deserialize)]
 pub enum MessageS2C {
     LoadChunk(ChunkPosition, HashMap<String, Vec<u32>>, Vec<EntityAddMessage>),

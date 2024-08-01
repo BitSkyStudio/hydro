@@ -7,7 +7,7 @@ use macroquad::prelude::*;
 use quad_net::web_socket::WebSocket;
 use uuid::Uuid;
 
-use hydro_common::{AnimationData, EntityAddMessage, MessageC2S, MessageS2C, RunningAnimation};
+use hydro_common::{AnimationData, EntityAddMessage, MessageC2S, MessageS2C, PlayerInputMessage, RunningAnimation};
 use hydro_common::pos::{CHUNK_SIZE, ChunkOffset, ChunkPosition};
 
 #[macroquad::main("hydro")]
@@ -22,6 +22,7 @@ async fn main() {
     };
     let mut camera_position = Vec2 { x: 0., y: 0. };
     let mut content = None;
+    let mut connected = false;
     loop {
         for message in connection.read_messages() {
             match message {
@@ -60,6 +61,7 @@ async fn main() {
                     }
                 }
                 MessageS2C::LoadContent(content_msg) => {
+                    connected = true;
                     content = Some(Content {
                         tilesets: content_msg.tilesets.into_iter().map(|(key, value)| {
                             let texture = Texture2D::from_file_with_format(value.asset.as_slice(), Some(ImageFormat::Png));
@@ -92,6 +94,13 @@ async fn main() {
                     camera_position = Vec2::new(position.x, position.y);
                 }
             }
+        }
+        if connected {
+            connection.send(MessageC2S::PlayerInput(PlayerInputMessage {
+                down: get_keys_down().iter().map(|key| *key as u16).collect(),
+                pressed: get_keys_pressed().iter().map(|key| *key as u16).collect(),
+                released: get_keys_released().iter().map(|key| *key as u16).collect(),
+            }));
         }
         clear_background(RED);
         let zoom = 200.;

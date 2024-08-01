@@ -1,4 +1,4 @@
-#![feature(int_roundings, async_closure, cell_update)]
+#![feature(int_roundings, async_closure, cell_update, hash_extract_if)]
 
 use std::cell::{Cell, RefCell, RefMut};
 use std::collections::HashMap;
@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use bincode::config;
 use futures::{FutureExt, StreamExt};
 use immutable_string::ImmutableString;
-use mlua::{Lua, OwnedAnyUserData, Table};
+use mlua::{IntoLuaMulti, Lua, OwnedAnyUserData, Table};
 use mlua::prelude::{LuaOwnedFunction, LuaOwnedTable};
 use tokio::runtime::Runtime;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -77,10 +77,7 @@ fn main() {
             let client = Client::new(&server.lua, client).unwrap();
             let id = { client.borrow::<Client>().unwrap().id.clone() };
             server.clients.borrow_mut().insert(id, client.clone());
-
-            let table = server.lua.create_table().unwrap();
-            table.set("client", client).unwrap();
-            server.call_event("client_join".into(), table.into_owned()).unwrap();
+            server.call_event("join".into(), client).unwrap();
         }
         server.tick();
 
@@ -208,7 +205,7 @@ pub struct Server {
 }
 impl Server {
     pub const TPS: u8 = 30;
-    pub fn call_event(&self, id: ImmutableString, data: LuaOwnedTable) -> mlua::Result<()> {
+    pub fn call_event<T: for<'a> IntoLuaMulti<'a> + Clone>(&self, id: ImmutableString, data: T) -> mlua::Result<()> {
         for event in self.event_handlers.get(&id).unwrap_or(&Vec::new()) {
             event.call(data.clone())?;
         }
@@ -218,6 +215,9 @@ impl Server {
         self.call_event("tick".into(), self.lua.create_table().unwrap().into_owned()).unwrap();
         for client in self.clients.borrow().values() {
             client.borrow_mut::<Client>().unwrap().tick(self, client.clone());
+        }
+        for client in self.clients.borrow_mut().extract_if(|id, client|client.borrow::<Client>().unwrap().closed){
+            self.call_event("leave".into(), client.1).unwrap();
         }
     }
     pub fn get_chunk(&self, position: ChunkPosition, world: ImmutableString) -> RefMut<Chunk> {

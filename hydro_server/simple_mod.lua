@@ -43,9 +43,13 @@ register_event("start", function()
     print(tileset("main"):get_data_at(pos1).aaa)
     spawn("player", pos1)
 end)
-register_event("client_join", function(data)
-    data.client:set_camera_position(pos(0, 0, "lobby"))
+register_event("join", function(client)
+    client:set_camera_position(pos(0, 0, "lobby"))
 end)
 register_event("tick", function()
-    --print(ticks_passed..":"..seconds_passed)
+    for id,client in pairs(get_clients()) do
+        if client:is_key_pressed(keys.a) then
+            print("ahoj")
+        end
+    end
 end)
