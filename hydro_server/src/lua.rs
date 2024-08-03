@@ -7,7 +7,7 @@ use immutable_string::ImmutableString;
 use mlua::{AnyUserData, Error, FromLua, Function, Lua, OwnedAnyUserData, OwnedFunction, Table, UserData, UserDataFields, UserDataMethods, Value};
 use uuid::Uuid;
 
-use hydro_common::{EntityAddMessage, MessageC2S, MessageS2C, PlayerInputMessage, RunningAnimation};
+use hydro_common::{EntityAddMessage, MessageC2S, MessageS2C, MouseButton, PlayerInputMessage, RunningAnimation};
 use hydro_common::pos::{CHUNK_SIZE, ChunkPosition, TilePosition, Vec2};
 
 use crate::{ChunkTileLayer, ClientConnection, Server, ServerPtr};
@@ -517,9 +517,13 @@ impl Client {
                 Ok(message) => {
                     match message {
                         MessageC2S::PlayerInput(mut player_input) => {
-                            self.player_input.down = player_input.down;
-                            self.player_input.pressed.extend(player_input.pressed.drain());
-                            self.player_input.released.extend(player_input.released.drain());
+                            self.player_input.keys_down = player_input.keys_down;
+                            self.player_input.keys_pressed.extend(player_input.keys_pressed.drain());
+                            self.player_input.keys_released.extend(player_input.keys_released.drain());
+                            self.player_input.buttons_down = player_input.buttons_down;
+                            self.player_input.buttons_pressed.extend(player_input.buttons_pressed.drain());
+                            self.player_input.buttons_released.extend(player_input.buttons_released.drain());
+                            self.player_input.mouse_position = player_input.mouse_position;
                         }
                     }
                 }
@@ -556,19 +560,36 @@ impl UserData for Client {
             Ok(())
         });
         methods.add_method("is_key_down", |lua, client, key: u16|{
-            Ok(client.player_input.down.contains(&key))
+            Ok(client.player_input.keys_down.contains(&key))
         });
         methods.add_method("is_key_pressed", |lua, client, key: u16|{
-            Ok(client.player_input.pressed.contains(&key))
+            Ok(client.player_input.keys_pressed.contains(&key))
         });
         methods.add_method("is_key_released", |lua, client, key: u16|{
-            Ok(client.player_input.released.contains(&key))
+            Ok(client.player_input.keys_released.contains(&key))
+        });
+        methods.add_method("is_button_down", |lua, client, button: u8|{
+            Ok(client.player_input.buttons_down.contains(&MouseButton::from(button)))
+        });
+        methods.add_method("is_button_pressed", |lua, client, button: u8|{
+            Ok(client.player_input.buttons_pressed.contains(&MouseButton::from(button)))
+        });
+        methods.add_method("is_button_released", |lua, client, button: u8|{
+            Ok(client.player_input.buttons_released.contains(&MouseButton::from(button)))
         });
         methods.add_meta_function("__index", |lua, (client, key): (AnyUserData, Value)| {
             client.nth_user_value::<Table>(2).unwrap().get::<Value, Value>(key)
         });
         methods.add_meta_function("__newindex", |lua, (client, key, value): (AnyUserData, Value, Value)| {
             client.nth_user_value::<Table>(2).unwrap().set(key, value)
+        });
+    }
+    fn add_fields<'lua, F: UserDataFields<'lua, Self>>(fields: &mut F) {
+        fields.add_field_method_get("mouse_position", |lua, client|{
+            let mouse_position = client.player_input.mouse_position;
+            Ok(client.camera.get_position().map(|position|{
+                Position{world: position.world, x: mouse_position.x as f64, y: mouse_position.y as f64 }
+            }))
         });
     }
 }

@@ -9,15 +9,31 @@ use crate::pos::{ChunkPosition, TilePosition, Vec2};
 
 pub mod pos;
 
+#[derive(Serialize, Deserialize, Hash, Eq, PartialEq, Copy, Clone)]
+#[repr(u8)]
+pub enum MouseButton{
+    Left = 0,
+    Right = 1,
+    Middle = 2,
+}
+impl From<u8> for MouseButton{
+    fn from(value: u8) -> Self {
+        unsafe { std::mem::transmute(value) }
+    }
+}
 #[derive(Serialize, Deserialize)]
 pub enum MessageC2S {
     PlayerInput(PlayerInputMessage)
 }
 #[derive(Serialize, Deserialize, Default)]
 pub struct PlayerInputMessage {
-    pub down: HashSet<u16>,
-    pub pressed: HashSet<u16>,
-    pub released: HashSet<u16>,
+    pub keys_down: HashSet<u16>,
+    pub keys_pressed: HashSet<u16>,
+    pub keys_released: HashSet<u16>,
+    pub buttons_down: HashSet<MouseButton>,
+    pub buttons_pressed: HashSet<MouseButton>,
+    pub buttons_released: HashSet<MouseButton>,
+    pub mouse_position: Vec2,
 }
 #[derive(Serialize, Deserialize)]
 pub enum MessageS2C {

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::net::ToSocketAddrs;
 
@@ -97,20 +97,49 @@ async fn main() {
                 }
             }
         }
-        if connected {
-            connection.send(MessageC2S::PlayerInput(PlayerInputMessage {
-                down: get_keys_down().iter().map(|key| *key as u16).collect(),
-                pressed: get_keys_pressed().iter().map(|key| *key as u16).collect(),
-                released: get_keys_released().iter().map(|key| *key as u16).collect(),
-            }));
-        }
-        clear_background(RED);
+
         let zoom = 200.;
-        set_camera(&Camera2D {
+        let camera = Camera2D {
             target: camera_position,
             zoom: Vec2::new(1. / (screen_width() / zoom), 1. / (screen_height() / zoom)),
             ..Default::default()
-        });
+        };
+
+        if connected {
+            let mut buttons_down = HashSet::new();
+            let mut buttons_pressed = HashSet::new();
+            let mut buttons_released = HashSet::new();
+            for button in [MouseButton::Left, MouseButton::Right, MouseButton::Middle] {
+                let net_button = match button {
+                    MouseButton::Left => hydro_common::MouseButton::Left,
+                    MouseButton::Right => hydro_common::MouseButton::Right,
+                    MouseButton::Middle => hydro_common::MouseButton::Middle,
+                    MouseButton::Unknown => unreachable!(),
+                };
+                if is_mouse_button_down(button) {
+                    buttons_down.insert(net_button);
+                }
+                if is_mouse_button_pressed(button) {
+                    buttons_pressed.insert(net_button);
+                }
+                if is_mouse_button_released(button) {
+                    buttons_released.insert(net_button);
+                }
+            }
+            let mouse = mouse_position();
+            let mouse = camera.screen_to_world(Vec2::new(mouse.0, mouse.1));
+            connection.send(MessageC2S::PlayerInput(PlayerInputMessage {
+                keys_down: get_keys_down().iter().map(|key| *key as u16).collect(),
+                keys_pressed: get_keys_pressed().iter().map(|key| *key as u16).collect(),
+                keys_released: get_keys_released().iter().map(|key| *key as u16).collect(),
+                buttons_down,
+                buttons_pressed,
+                buttons_released,
+                mouse_position: hydro_common::pos::Vec2{x: mouse.x, y: mouse.y},
+            }));
+        }
+        clear_background(RED);
+        set_camera(&camera);
         if let Some(content) = &content {
             for (position, tiles) in &world.chunks {
                 for (tileset, tiles) in tiles {

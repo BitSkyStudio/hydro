@@ -37,7 +37,7 @@ impl TilePosition {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default, Copy, Clone)]
 pub struct Vec2 {
     pub x: f32,
     pub y: f32,
