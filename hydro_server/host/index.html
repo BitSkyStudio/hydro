@@ -24,6 +24,7 @@
 <!-- Minified and statically hosted version of https://github.com/not-fl3/macroquad/blob/master/js/mq_js_bundle.js -->
 <script src="mq_js_bundle.js"></script>
 <script>
+    document.addEventListener('contextmenu', event => event.preventDefault());
     register_plugin = function (importObject) {
         importObject.env.set_title_name = function (js_object) {
             document.title = consume_js_object(js_object);

@@ -52,7 +52,7 @@ register_event("join", function(client)
 end)
 register_event("tick", function()
     for id,client in pairs(get_clients()) do
-        print("mouse"..client.mouse_position.x..":"..client.mouse_position.y.."-"..client.mouse_position.world)
+        --print("mouse"..client.mouse_position.x..":"..client.mouse_position.y.."-"..client.mouse_position.world)
         if client:is_key_pressed(keys.a) then
             print("ahoj")
         end
