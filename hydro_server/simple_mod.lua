@@ -48,7 +48,7 @@ register_event("start", function()
     end, 3)
 end)
 register_event("join", function(client)
-    local player_entity = spawn("player", pos(0, 0, "lobby"))
+    local player_entity = spawn("player", pos(-2, 0, "lobby"))
     client:set_camera_entity(player_entity)
     client.controlling_entity = player_entity
 end)
@@ -63,17 +63,20 @@ register_event("tick", function()
         if client:is_key_down(keys.w) then
             new_position = new_position:move(0, -1*speed)
         end
-        if client:is_key_down(keys.a) then
-            new_position = new_position:move(-1*speed, 0)
-        end
         if client:is_key_down(keys.s) then
             new_position = new_position:move(0, 1*speed)
+        end
+
+        _,client.controlling_entity.position = client.controlling_entity:get_collider("main"):test_sweep(1, new_position)
+        new_position = client.controlling_entity.position
+
+        if client:is_key_down(keys.a) then
+            new_position = new_position:move(-1*speed, 0)
         end
         if client:is_key_down(keys.d) then
             new_position = new_position:move(1*speed, 0)
         end
-        --client.controlling_entity.position = client.controlling_entity.get_collider("main").test_sweep(2, )
-        client.controlling_entity.position = new_position
+        _,client.controlling_entity.position = client.controlling_entity:get_collider("main"):test_sweep(1, new_position)
     end
 end)
 register_event("load_chunk", function(position)

@@ -490,7 +490,11 @@ impl UserData for LuaAABB {
                 }
             }
             //todo: this is stupid
-            Ok(collision_time)
+            Ok((collision_time, Position{
+                x: aabb.aabb.x + (target_position.x-aabb.aabb.x) * collision_time,
+                y: aabb.aabb.y + (target_position.y-aabb.aabb.y) * collision_time,
+                world: aabb.world.clone(),
+            }))
         });
     }
 }
