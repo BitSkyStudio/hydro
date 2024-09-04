@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use bincode::config;
 use bincode::error::DecodeError;
-use futures::{FutureExt, StreamExt};
+use futures::{FutureExt, SinkExt, StreamExt};
 use immutable_string::ImmutableString;
 use mlua::{IntoLuaMulti, Lua, OwnedAnyUserData, Table};
 use mlua::prelude::{LuaOwnedFunction, LuaOwnedTable};
@@ -246,7 +246,8 @@ impl Server {
         for client in self.clients.borrow().values() {
             client.borrow_mut::<Client>().unwrap().tick(self, client.clone());
         }
-        for client in self.clients.borrow_mut().extract_if(|id, client|client.borrow::<Client>().unwrap().closed){
+        let removed_clients = self.clients.borrow_mut().extract_if(|id, client|client.borrow::<Client>().unwrap().closed).collect::<Vec<_>>();
+        for client in removed_clients {
             self.call_event("leave".into(), client.1).unwrap();
         }
         while let Some(mut task) = self.get_next_scheduled_task(){
@@ -284,11 +285,16 @@ impl Server {
             })
         })
     }
+    pub fn try_send_message_to(&self, id: Uuid, message: MessageS2C){
+        if let Some(client) = self.clients.borrow().get(&id) {
+            let _ = client.borrow::<Client>().unwrap().connection.sender.send(message);
+        }
+    }
 }
 type ServerPtr = Arc<Server>;
 pub struct ClientConnection {
     receiver: Receiver<MessageC2S>,
-    sender: tokio::sync::mpsc::UnboundedSender<MessageS2C>,
+    pub sender: tokio::sync::mpsc::UnboundedSender<MessageS2C>,
 }
 pub struct World {
     chunks: HashMap<ChunkPosition, Chunk>,

@@ -53,7 +53,7 @@ async fn main() {
                 }
                 MessageS2C::UpdateEntityPosition(id, position) => {
                     if let Some(entity) = world.entities.get_mut(&id) {
-                        entity.0 = Vec2::new(position.x, position.y);
+                        entity.0 = Vec2::new(position.x as f32, position.y as f32);
                     }
                 }
                 MessageS2C::UpdateEntityAnimation(id, animation) => {
@@ -93,7 +93,7 @@ async fn main() {
                     });
                 }
                 MessageS2C::CameraInfo(position) => {
-                    camera_position = Vec2::new(position.x, position.y);
+                    camera_position = Vec2::new(position.x as f32, position.y as f32);
                 }
             }
         }
@@ -135,7 +135,7 @@ async fn main() {
                 buttons_down,
                 buttons_pressed,
                 buttons_released,
-                mouse_position: hydro_common::pos::Vec2{x: mouse.x, y: mouse.y},
+                mouse_position: hydro_common::pos::Vec2{x: mouse.x as f64, y: mouse.y as f64 },
             }));
         }
         clear_background(RED);
@@ -209,7 +209,7 @@ pub struct World {
 }
 impl World {
     pub fn add_entity(&mut self, entity: EntityAddMessage) {
-        self.entities.insert(entity.uuid, (Vec2::new(entity.position.x, entity.position.y), entity.entity_type, entity.animation));
+        self.entities.insert(entity.uuid, (Vec2::new(entity.position.x as f32, entity.position.y as f32), entity.entity_type, entity.animation));
     }
 }
 

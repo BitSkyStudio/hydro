@@ -41,21 +41,39 @@ register_event("start", function()
     tileset("main"):set_at(pos1, "stone")
     tileset("main"):set_at(pos(1, 1, "lobby"), "stone")
     print(tileset("main"):get_data_at(pos1).aaa)
-    spawn("player", pos1)
+
     schedule(function()
         print("here")
         return 1
     end, 3)
 end)
 register_event("join", function(client)
-    client:set_camera_position(pos(0, 0, "lobby"))
+    local player_entity = spawn("player", pos(0, 0, "lobby"))
+    client:set_camera_entity(player_entity)
+    client.controlling_entity = player_entity
+end)
+register_event("leave", function(client)
+    client.controlling_entity:remove()
 end)
 register_event("tick", function()
     for id,client in pairs(get_clients()) do
         --print("mouse"..client.mouse_position.x..":"..client.mouse_position.y.."-"..client.mouse_position.world)
-        if client:is_key_pressed(keys.a) then
-            print("ahoj")
+        new_position = client.controlling_entity.position
+        speed = 1/20
+        if client:is_key_down(keys.w) then
+            new_position = new_position:move(0, -1*speed)
         end
+        if client:is_key_down(keys.a) then
+            new_position = new_position:move(-1*speed, 0)
+        end
+        if client:is_key_down(keys.s) then
+            new_position = new_position:move(0, 1*speed)
+        end
+        if client:is_key_down(keys.d) then
+            new_position = new_position:move(1*speed, 0)
+        end
+        --client.controlling_entity.position = client.controlling_entity.get_collider("main").test_sweep(2, )
+        client.controlling_entity.position = new_position
     end
 end)
 register_event("load_chunk", function(position)

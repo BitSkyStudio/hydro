@@ -149,7 +149,7 @@ impl UserData for LuaTileSet {
                 tile_data.to_ref().set("invalid", true)?;
             }
             for viewer in chunk.viewers.borrow().values() {
-                viewer.borrow::<Client>().unwrap().connection.sender.send(MessageS2C::SetTile(tile_pos, tile_map.tileset.to_string(), tile_id)).unwrap()
+                let _ = viewer.borrow::<Client>().unwrap().connection.sender.send(MessageS2C::SetTile(tile_pos, tile_map.tileset.to_string(), tile_id));
             }
             Ok(())
         });
@@ -185,6 +185,15 @@ impl UserData for Position {
         fields.add_field_method_get("world", |_, pos| { Ok(pos.world.to_string()) });
         fields.add_field_method_get("chunk_x", |_, pos| { Ok(pos.align_to_tile().to_chunk_position().0.x) });
         fields.add_field_method_get("chunk_y", |_, pos| { Ok(pos.align_to_tile().to_chunk_position().0.y) });
+    }
+    fn add_methods<'lua, M: UserDataMethods<'lua, Self>>(methods: &mut M) {
+        methods.add_method("move", |_, pos, (x,y): (f64,f64)|{
+            Ok(Position{
+                x: pos.x + x,
+                y: pos.y + y,
+                world: pos.world.clone(),
+            })
+        });
     }
 }
 impl Position {
@@ -237,13 +246,16 @@ impl Entity {
         user_data.to_ref().set_nth_user_value(2, table).unwrap();
         server.entities.borrow_mut().insert(uuid, user_data.clone());
         chunk.entities.insert(uuid, user_data.clone());
+        for viewer in chunk.viewers.borrow().values(){
+            let _ = viewer.borrow::<Client>().unwrap().connection.sender.send(MessageS2C::AddEntity(user_data.borrow::<Entity>().unwrap().create_add_message(&server)));
+        }
         Ok(user_data)
     }
     pub fn create_add_message(&self, server: &Server) -> EntityAddMessage {
         let position = self.position.borrow();
         let animation = self.animation.borrow();
         EntityAddMessage {
-            position: Vec2 { x: position.x as f32, y: position.y as f32 },
+            position: Vec2 { x: position.x, y: position.y },
             entity_type: self.type_id.to_string(),
             uuid: self.uuid,
             animation: RunningAnimation {
@@ -256,7 +268,7 @@ impl Entity {
         let position = self.position.borrow();
         let animation = self.animation.borrow();
         for viewer in server.get_chunk(position.align_to_tile().to_chunk_position().0, position.world.clone()).viewers.borrow().values() {
-            viewer.borrow::<Client>().unwrap().connection.sender.send(MessageS2C::UpdateEntityAnimation(self.uuid, RunningAnimation { id: animation.animation.to_string(), time: animation.running_for(server) as f32 })).unwrap();
+            let _ = viewer.borrow::<Client>().unwrap().connection.sender.send(MessageS2C::UpdateEntityAnimation(self.uuid, RunningAnimation { id: animation.animation.to_string(), time: animation.running_for(server) as f32 }));
         }
     }
 }
@@ -276,17 +288,30 @@ impl UserData for Entity {
             let old_chunk_position = old_position.align_to_tile().to_chunk_position().0;
             let new_chunk_position = position.align_to_tile().to_chunk_position().0;
             if old_position.world != position.world || old_chunk_position != new_chunk_position {
-                let mut old_chunk = server.get_chunk(old_chunk_position, old_position.world);
-                old_chunk.entities.remove(&entity.uuid);
-                let mut new_chunk = server.get_chunk(new_chunk_position, position.world.clone());
-                new_chunk.entities.insert(entity.uuid, entity_obj);
-                let old_viewers: HashSet<Uuid> = old_chunk.viewers.borrow().keys().cloned().collect();
-                let new_viewers: HashSet<Uuid> = new_chunk.viewers.borrow().keys().cloned().collect();
+                let old_viewers: HashSet<Uuid> = {
+                    let mut old_chunk = server.get_chunk(old_chunk_position, old_position.world);
+                    old_chunk.entities.remove(&entity.uuid);
+                    let v = old_chunk.viewers.borrow().keys().cloned().collect();
+                    v
+                };
+                let new_viewers: HashSet<Uuid> = {
+                    let mut new_chunk = server.get_chunk(new_chunk_position, position.world.clone());
+                    new_chunk.entities.insert(entity.uuid, entity_obj);
+                    let v = new_chunk.viewers.borrow().keys().cloned().collect();
+                    v
+                };
                 for new_viewer in new_viewers.difference(&old_viewers) {
-                    new_chunk.viewers.borrow().get(new_viewer).unwrap().borrow::<Client>().unwrap().connection.sender.send(MessageS2C::AddEntity(entity.create_add_message(&server))).unwrap();
+                    server.try_send_message_to(*new_viewer, MessageS2C::AddEntity(entity.create_add_message(&server)));
+                }
+                for viewer in new_viewers.intersection(&old_viewers) {
+                    server.try_send_message_to(*viewer, MessageS2C::UpdateEntityPosition(entity.uuid, Vec2 { x: position.x, y: position.y }));
                 }
                 for old_viewer in old_viewers.difference(&new_viewers) {
-                    old_chunk.viewers.borrow().get(old_viewer).unwrap().borrow::<Client>().unwrap().connection.sender.send(MessageS2C::RemoveEntity(entity.uuid.clone())).unwrap();
+                    server.try_send_message_to(*old_viewer, MessageS2C::RemoveEntity(entity.uuid.clone()));
+                }
+            } else {
+                for viewer in server.get_chunk(position.align_to_tile().to_chunk_position().0, position.world.clone()).viewers.borrow().keys() {
+                    server.try_send_message_to(*viewer, MessageS2C::UpdateEntityPosition(entity.uuid, Vec2 { x: position.x, y: position.y }));
                 }
             }
             *entity.position.borrow_mut() = position;
@@ -338,8 +363,8 @@ impl UserData for Entity {
             let mut chunk = server.get_chunk(chunk, position.world);
             chunk.entities.remove(&entity.uuid);
             entity.removed.load(Ordering::SeqCst);
-            for viewer in chunk.viewers.borrow().values() {
-                viewer.borrow::<Client>().unwrap().connection.sender.send(MessageS2C::RemoveEntity(entity.uuid)).unwrap();
+            for viewer in chunk.viewers.borrow().keys() {
+                server.try_send_message_to(*viewer, MessageS2C::RemoveEntity(entity.uuid));
             }
             Ok(())
         });
@@ -360,9 +385,25 @@ impl UserData for Entity {
     }
 }
 
+#[derive(Clone)]
 pub struct LuaAABB {
     aabb: AABB,
     world: ImmutableString,
+}
+impl LuaAABB{
+    pub fn collides(&self, server: &Server, mask: u32) -> bool{
+        for tile in self.aabb.tiles_overlapping() {
+            let (chunk_position, chunk_offset) = tile.to_chunk_position();
+            let chunk = server.get_chunk(chunk_position, self.world.clone());
+            for (tileset, tile_layer) in chunk.tile_layers.iter() {
+                let tile_type = server.tile_sets.get(tileset).unwrap().by_id(tile_layer.0[chunk_offset.x as usize + (chunk_offset.y as usize * CHUNK_SIZE as usize)]).unwrap();
+                if tile_type.collision_mask & mask != 0 {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }
 impl UserData for LuaAABB {
     fn add_fields<'lua, F: UserDataFields<'lua, Self>>(fields: &mut F) {
@@ -413,18 +454,7 @@ impl UserData for LuaAABB {
                     }
                 }
             }
-            let worlds = server.worlds.borrow();
-            let world = worlds.get(&aabb.world).unwrap();
-            for tile in aabb.aabb.tiles_overlapping() {
-                let (chunk_position, chunk_offset) = tile.to_chunk_position();
-                let chunk = world.chunks.get(&chunk_position).unwrap();
-                for (tileset, tile_layer) in chunk.tile_layers.iter() {
-                    let tile_type = server.tile_sets.get(tileset).unwrap().by_id(tile_layer.0[chunk_offset.x as usize + (chunk_offset.y as usize * CHUNK_SIZE as usize)]).unwrap();
-                    if tile_type.collision_mask & mask != 0 {
-                        collided = true;
-                    }
-                }
-            }
+            collided |= aabb.collides(&server, mask);
             Ok(collided)
         });
         methods.add_method("test_sweep", |lua: &Lua, aabb, (mask, target_position): (u32, Position)| {
@@ -446,14 +476,27 @@ impl UserData for LuaAABB {
                     }
                 }
             }
-            //todo: tiles
+            if aabb.collides(&server, mask){
+                collision_time = 0.;
+            }
+            let movement = Vec2{x: (target_position.x-aabb.aabb.x)/5., y: (target_position.y-aabb.aabb.y)/5.};
+            for i in 0..5 {
+                let mut aabb = aabb.clone();
+                aabb.aabb.x += movement.x*(i+1) as f64;
+                aabb.aabb.y += movement.y*(i+1) as f64;
+                if aabb.collides(&server, mask){
+                    collision_time = collision_time.min(i as f64/5.);
+                    break;
+                }
+            }
+            //todo: this is stupid
             Ok(collision_time)
         });
     }
 }
 
 pub struct Client {
-    connection: ClientConnection,
+    pub(crate) connection: ClientConnection,
     camera: ClientCameraType,
     pub(crate) closed: bool,
     pub id: Uuid,
@@ -479,34 +522,34 @@ impl Client {
             for old_chunk_position in old.1.difference(&new.1) {
                 let old_chunk = server.get_chunk(*old_chunk_position, old.0.clone());
                 old_chunk.viewers.borrow_mut().remove(&self.id);
-                self.connection.sender.send(MessageS2C::UnloadChunk(*old_chunk_position, old_chunk.entities.keys().cloned().collect())).unwrap();
+                self.connection.sender.send(MessageS2C::UnloadChunk(*old_chunk_position, old_chunk.entities.keys().cloned().collect())).expect("TODO: panic message");
             }
             for new_chunk_position in new.1.difference(&old.1) {
                 let new_chunk = server.get_chunk(*new_chunk_position, new.0.clone());
                 new_chunk.viewers.borrow_mut().insert(self.id, lua_ref.clone());
-                self.connection.sender.send(MessageS2C::LoadChunk(*new_chunk_position,
-                                                                  new_chunk.tile_layers.iter().map(|(key, value)| (key.to_string(), value.0.clone())).collect(),
-                                                                  new_chunk.entities.values().map(|entity| entity.borrow::<Entity>().unwrap().create_add_message(server)).collect(),
-                )).unwrap();
+                let _ = self.connection.sender.send(MessageS2C::LoadChunk(*new_chunk_position,
+                                                                          new_chunk.tile_layers.iter().map(|(key, value)| (key.to_string(), value.0.clone())).collect(),
+                                                                          new_chunk.entities.values().map(|entity| entity.borrow::<Entity>().unwrap().create_add_message(server)).collect(),
+                ));
             }
         } else {
             for old_chunk_position in old.1 {
                 let old_chunk = server.get_chunk(old_chunk_position, old.0.clone());
                 old_chunk.viewers.borrow_mut().remove(&self.id);
-                self.connection.sender.send(MessageS2C::UnloadChunk(old_chunk_position, old_chunk.entities.keys().cloned().collect())).unwrap();
+                let _ = self.connection.sender.send(MessageS2C::UnloadChunk(old_chunk_position, old_chunk.entities.keys().cloned().collect()));
             }
             for new_chunk_position in new.1 {
                 let new_chunk = server.get_chunk(new_chunk_position, new.0.clone());
                 new_chunk.viewers.borrow_mut().insert(self.id, lua_ref.clone());
-                self.connection.sender.send(MessageS2C::LoadChunk(new_chunk_position,
-                                                                  new_chunk.tile_layers.iter().map(|(key, value)| (key.to_string(), value.0.clone())).collect(),
-                                                                  new_chunk.entities.values().map(|entity| entity.borrow::<Entity>().unwrap().create_add_message(server)).collect(),
-                )).unwrap();
+                let _ = self.connection.sender.send(MessageS2C::LoadChunk(new_chunk_position,
+                                                                          new_chunk.tile_layers.iter().map(|(key, value)| (key.to_string(), value.0.clone())).collect(),
+                                                                          new_chunk.entities.values().map(|entity| entity.borrow::<Entity>().unwrap().create_add_message(server)).collect(),
+                ));
             }
         }
         let camera_position = new_camera.get_position();
         if let Some(camera_position) = camera_position {
-            self.connection.sender.send(MessageS2C::CameraInfo(Vec2 { x: camera_position.x as f32, y: camera_position.y as f32 })).unwrap();
+            let _ = self.connection.sender.send(MessageS2C::CameraInfo(Vec2 { x: camera_position.x, y: camera_position.y }));
         }
         self.camera = new_camera;
     }
