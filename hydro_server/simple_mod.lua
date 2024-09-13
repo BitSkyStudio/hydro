@@ -11,7 +11,23 @@ register_tileset("main", {
         size = 8,
     }
 })
+function dump(o)
+   if type(o) == 'table' then
+      local s = '{ '
+      for k,v in pairs(o) do
+         if type(k) ~= 'number' then k = '"'..k..'"' end
+         s = s .. '['..k..'] = ' .. dump(v) .. ','
+      end
+      return s .. '} '
+   else
+      return tostring(o)
+   end
+end
 
+--print(dump(get_tilesets_from_mapfile("map.tmx")))
+tileset = get_tilesets_from_mapfile("map.tmx")["root_tileset0"]
+tileset.asset.file =  "root_tileset0"
+register_tileset("aaa", tileset)
 register_entity("player", {
     test = "abc",
     colliders={
@@ -37,15 +53,20 @@ register_entity("player", {
 })
 
 register_event("start", function()
-    local pos1 = pos(0, 0, "lobby")
-    tileset("main"):set_at(pos1, "stone")
-    tileset("main"):set_at(pos(1, 1, "lobby"), "stone")
-    print(tileset("main"):get_data_at(pos1).aaa)
+    --local pos1 = pos(0, 0, "lobby")
+    --tileset("main"):set_at(pos1, "stone")
+    --tileset("main"):set_at(pos(1, 1, "lobby"), "stone")
+    --print(tileset("main"):get_data_at(pos1).aaa)
 
-    schedule(function()
-        print("here")
-        return 1
-    end, 3)
+    --schedule(function()
+    --    print("here")
+    --    return 1
+    --end, 3)
+
+    local layers = {}
+    layers["Tile Layer 1"] = "aaa"
+    layers["Tile Layer 2"] = "aaa"
+    load_map_into_world("map.tmx", "lobby", layers)
 end)
 register_event("join", function(client)
     local player_entity = spawn("player", pos(-2, 0, "lobby"))

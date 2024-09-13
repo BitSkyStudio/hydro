@@ -14,3 +14,5 @@ bincode = { version = "2.0.0-rc.3", features = ["serde"] }
 tokio-stream = "0.1.9"
 futures = "0.3.30"
 base64 = "0.22.1"
+tiled = "0.12.1"
+anyhow = "1.0.87"

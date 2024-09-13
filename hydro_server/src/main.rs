@@ -13,6 +13,7 @@ use futures::{FutureExt, SinkExt, StreamExt};
 use immutable_string::ImmutableString;
 use mlua::{IntoLuaMulti, Lua, OwnedAnyUserData, Table};
 use mlua::prelude::{LuaOwnedFunction, LuaOwnedTable};
+use tiled::{ChunkData, TileLayer};
 use tokio::runtime::Runtime;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
@@ -21,9 +22,9 @@ use warp::http::Response;
 use warp::ws::Message;
 
 use hydro_common::{AnimationData, EntityContentMessage, LoadContentMessage, MessageC2S, MessageS2C, TileSetContentMessage};
-use hydro_common::pos::{CHUNK_SIZE, ChunkOffset, ChunkPosition};
+use hydro_common::pos::{CHUNK_SIZE, ChunkOffset, ChunkPosition, TilePosition};
 
-use crate::lua::{Client, Collider, Position};
+use crate::lua::{load_tiled_properties_into_lua_table, Client, Collider, Position};
 use crate::util::AABB;
 
 mod util;
@@ -193,6 +194,31 @@ impl InitEnvironment {
             tile_sets.insert(name.into(), tile_set);
             Ok(())
         }).unwrap()).unwrap();
+        globals.set("get_tilesets_from_mapfile", lua.create_function(|lua, (map): (String)|{
+            let mut map = tiled::Loader::new().load_tmx_map(map).unwrap();
+            let tilesets_table = lua.create_table().unwrap();
+            for tileset in map.tilesets(){
+                let tileset_table = lua.create_table().unwrap();
+                let tileset_tiles_table = lua.create_table().unwrap();
+                let tileset_assets_table = lua.create_table().unwrap();
+                tileset_assets_table.set("file", tileset.image.as_ref().unwrap().source.to_str()).unwrap();
+                tileset_assets_table.set("size", tileset.tile_width).unwrap();
+                for (id, tile) in tileset.tiles(){
+                    let tile_table = lua.create_table().unwrap();
+                    load_tiled_properties_into_lua_table(lua, &tile_table, &tile.properties);
+                    tile_table.set("id", format!("{}", id)).unwrap();
+                    let asset_pos_table = lua.create_table().unwrap();
+                    asset_pos_table.set("x", id%tileset.columns).unwrap();
+                    asset_pos_table.set("y", id/tileset.columns).unwrap();
+                    tile_table.set("asset_pos", asset_pos_table).unwrap();
+                    tileset_tiles_table.push(tile_table).unwrap();
+                }
+                tileset_table.set("tiles", tileset_tiles_table).unwrap();
+                tileset_table.set("asset", tileset_assets_table).unwrap();
+                tilesets_table.set(tileset.name.clone(), tileset_table).unwrap();
+            }
+            Ok(tilesets_table)
+        }).unwrap()).unwrap();
         globals.set("register_entity", lua.create_function(|lua, (name, table): (String, Table)| {
             let init_env = lua.app_data_ref::<InitEnvironment>().ok_or(mlua::Error::runtime("this method can only be used during initialization"))?;
             let mut entity_registry = init_env.entity_registry.borrow_mut();
@@ -289,6 +315,21 @@ impl Server {
         if let Some(client) = self.clients.borrow().get(&id) {
             let _ = client.borrow::<Client>().unwrap().connection.sender.send(message);
         }
+    }
+    pub fn set_tile(&self, tile_pos: TilePosition, world: ImmutableString, tileset_id: ImmutableString, id: ImmutableString) -> mlua::Result<()>{
+        let (chunk_position, chunk_offset) = tile_pos.to_chunk_position();
+        let mut chunk = self.get_chunk(chunk_position, world);
+        let tile_layer = chunk.tile_layers.entry(tileset_id.clone()).or_insert_with(|| ChunkTileLayer::new());
+        let tileset = self.tile_sets.get(&tileset_id).ok_or(mlua::Error::runtime("tileset doesn't exist"))?;
+        let tile_id = tileset.tiles.get::<ImmutableString>(&id.into()).ok_or(mlua::Error::runtime("tile not found in tileset"))?.id;
+        tile_layer.0[chunk_offset.index()] = tile_id;
+        if let Some(tile_data) = tile_layer.1.remove(&chunk_offset) {
+            tile_data.to_ref().set("invalid", true)?;
+        }
+        for viewer in chunk.viewers.borrow().values() {
+            let _ = viewer.borrow::<Client>().unwrap().connection.sender.send(MessageS2C::SetTile(tile_pos, tileset_id.to_string(), tile_id));
+        }
+        Ok(())
     }
 }
 type ServerPtr = Arc<Server>;

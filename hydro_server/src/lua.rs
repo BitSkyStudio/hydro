@@ -5,6 +5,7 @@ use std::sync::mpsc::TryRecvError;
 
 use immutable_string::ImmutableString;
 use mlua::{AnyUserData, Error, FromLua, Function, Lua, OwnedAnyUserData, OwnedFunction, Table, UserData, UserDataFields, UserDataMethods, Value};
+use tiled::{ChunkData, LayerType, Properties, PropertyValue, TileLayer};
 use uuid::Uuid;
 
 use hydro_common::{EntityAddMessage, MessageC2S, MessageS2C, MouseButton, PlayerInputMessage, RunningAnimation};
@@ -39,23 +40,23 @@ pub fn init_lua_functions(lua: &Lua) {
 
     globals.set("get_entity", lua.create_function(|lua, (id, ): (String,)| {
         let uuid = Uuid::parse_str(id.as_str()).map_err(|_| Error::runtime("malformed uuid"))?;
-        let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+        let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on running server"))?;
         let id = server.entities.borrow().get(&uuid).cloned();
         Ok(id)
     }).unwrap()).unwrap();
     globals.set("get_client", lua.create_function(|lua, (id, ): (String,)| {
         let uuid = Uuid::parse_str(id.as_str()).map_err(|_| Error::runtime("malformed uuid"))?;
-        let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+        let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on running server"))?;
         let id = server.clients.borrow().get(&uuid).cloned();
         Ok(id)
     }).unwrap()).unwrap();
     globals.set("get_clients", lua.create_function(|lua, ()| {
-        let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+        let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on running server"))?;
         let clients = server.clients.borrow();
         Ok(clients.iter().map(|(key,value)|(key.to_string(), value.clone())).collect::<HashMap<String, OwnedAnyUserData>>())
     }).unwrap()).unwrap();
     globals.set("schedule", lua.create_function(|lua, (task, after): (OwnedFunction,f64)| {
-        let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+        let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on running server"))?;
         server.schedule_task(move |server|{
             let reschedule = task.call::<(),Value>(()).unwrap();
             match reschedule{
@@ -65,6 +66,55 @@ pub fn init_lua_functions(lua: &Lua) {
                 _ => panic!(),
             }
         }, after);
+        Ok(())
+    }).unwrap()).unwrap();
+
+    globals.set("load_map_into_world", lua.create_function(|lua, (map, world, tilesets): (String, String, Table)|{
+        let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on running server"))?;
+        let world: ImmutableString = world.into();
+        let mut map = tiled::Loader::new().load_tmx_map(map).unwrap();
+        for layer in map.layers() {
+            match layer.layer_type(){
+                LayerType::Tiles(tiles) => {
+                    if let Some(tileset) = tilesets.get::<_, String>(layer.name.as_str()).ok().map(|tileset|Into::<ImmutableString>::into(tileset)) {
+                        match tiles{
+                            TileLayer::Finite(finite) => {}
+                            TileLayer::Infinite(infinite) => {
+                                for (pos, chunk) in infinite.chunks() {
+                                    for x in 0..ChunkData::WIDTH {
+                                        for y in 0..ChunkData::HEIGHT {
+                                            let position = TilePosition {
+                                                x: pos.0 * ChunkData::WIDTH as i32 + x as i32,
+                                                y: pos.1 * ChunkData::HEIGHT as i32 + y as i32,
+                                            };
+                                            if let Some(tile) = chunk.get_tile(x as i32, y as i32) {
+                                                server.set_tile(position, world.clone(), tileset.clone(), format!("{}", tile.id()).into())?;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                LayerType::Objects(objects) => {
+                    for object in objects.objects() {
+                        let id = match object.properties.get("Class").unwrap(){
+                            PropertyValue::StringValue(string) => string,
+                            _ => panic!(),
+                        };
+                        let mut entity = Entity::new(lua, id.as_str().into(), Position{
+                            x: object.x as f64,
+                            y: object.y as f64,
+                            world: world.clone(),
+                        }).unwrap();
+                        load_tiled_properties_into_lua_table(lua, &entity.to_ref().nth_user_value::<Table>(2).unwrap(), &object.properties);
+                    }
+                }
+                LayerType::Image(_) => {}
+                LayerType::Group(_) => {}
+            }
+        }
         Ok(())
     }).unwrap()).unwrap();
 
@@ -115,14 +165,38 @@ pub fn init_lua_functions(lua: &Lua) {
         globals.set("keys", keys).unwrap();
     }
 }
-
+pub fn load_tiled_properties_into_lua_table(lua: &Lua, table: &Table, properties: &Properties){
+    for (name, property) in properties{
+        match property{
+            PropertyValue::BoolValue(value) => {
+                table.set(name.as_str(), *value).unwrap();
+            }
+            PropertyValue::FloatValue(value) => {
+                table.set(name.as_str(), *value).unwrap();
+            }
+            PropertyValue::IntValue(value) => {
+                table.set(name.as_str(), *value).unwrap();
+            }
+            PropertyValue::StringValue(value) => {
+                table.set(name.as_str(), value.as_str()).unwrap();
+            }
+            PropertyValue::ClassValue { property_type, properties } => {
+                let class = lua.create_table().unwrap();
+                class.set("type", property_type.as_str()).unwrap();
+                load_tiled_properties_into_lua_table(lua, &class, properties);
+                table.set(name.as_str(), class).unwrap();
+            }
+            _ => unimplemented!()
+        }
+    }
+}
 pub struct LuaTileSet {
     tileset: ImmutableString,
 }
 impl UserData for LuaTileSet {
     fn add_methods<'lua, M: UserDataMethods<'lua, Self>>(methods: &mut M) {
         methods.add_method("get_at", |lua, tile_map, (pos, ): (Position,)| {
-            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on running server"))?;
             let (chunk_position, chunk_offset) = pos.align_to_tile().to_chunk_position();
             let chunk = server.get_chunk(chunk_position, pos.world);
             let tile_id = match chunk.tile_layers.get(&tile_map.tileset) {
@@ -137,24 +211,12 @@ impl UserData for LuaTileSet {
             Ok(tileset.tiles.get(&tileset.tile_ids[tile_id as usize]).unwrap().data.clone())
         });
         methods.add_method("set_at", |lua, tile_map, (pos, id): (Position, String)| {
-            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on running server"))?;
             let tile_pos = pos.align_to_tile();
-            let (chunk_position, chunk_offset) = tile_pos.to_chunk_position();
-            let mut chunk = server.get_chunk(chunk_position, pos.world);
-            let tile_layer = chunk.tile_layers.entry(tile_map.tileset.clone()).or_insert_with(|| ChunkTileLayer::new());
-            let tileset = server.tile_sets.get(&tile_map.tileset).ok_or(Error::runtime("tileset doesn't exist"))?;
-            let tile_id = tileset.tiles.get::<ImmutableString>(&id.into()).ok_or(Error::runtime("tile not found in tileset"))?.id;
-            tile_layer.0[chunk_offset.index()] = tile_id;
-            if let Some(tile_data) = tile_layer.1.remove(&chunk_offset) {
-                tile_data.to_ref().set("invalid", true)?;
-            }
-            for viewer in chunk.viewers.borrow().values() {
-                let _ = viewer.borrow::<Client>().unwrap().connection.sender.send(MessageS2C::SetTile(tile_pos, tile_map.tileset.to_string(), tile_id));
-            }
-            Ok(())
+            server.set_tile(tile_pos, pos.world.clone(), tile_map.tileset.clone(), id.into())
         });
         methods.add_method("get_data_at", |lua, tile_map, (pos, ): (Position,)| {
-            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on running server"))?;
             let (chunk_position, chunk_offset) = pos.align_to_tile().to_chunk_position();
             let mut chunk = server.get_chunk(chunk_position, pos.world);
             let tile_layer = chunk.tile_layers.entry(tile_map.tileset.clone()).or_insert_with(|| ChunkTileLayer::new());
@@ -228,7 +290,7 @@ pub struct Entity {
 }
 impl Entity {
     pub fn new(lua: &Lua, id: ImmutableString, position: Position) -> mlua::Result<OwnedAnyUserData> {
-        let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+        let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on running server"))?;
         let mut chunk = server.get_chunk(position.align_to_tile().to_chunk_position().0, position.world.clone());
         let table = lua.create_table().unwrap().into_owned();
         table.to_ref().set_metatable(Some(server.entity_registry.entities.get(&id).unwrap().data_metatable.to_ref()));
@@ -282,7 +344,7 @@ impl UserData for Entity {
             let entity = entity_obj.clone();
             let entity = entity.borrow::<Entity>().unwrap();
 
-            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on running server"))?;
 
             let old_position = entity.position.borrow().clone();
             let old_chunk_position = old_position.align_to_tile().to_chunk_position().0;
@@ -318,7 +380,7 @@ impl UserData for Entity {
             Ok(())
         });
         fields.add_field_method_set("animation", |lua, entity, animation: String| {
-            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on running server"))?;
             let animation_id = animation.into();
             if server.entity_registry.entities.get(&entity.type_id).unwrap().animations.contains_key(&animation_id) {
                 return Err(Error::runtime("animation doesn't exist"))?;
@@ -335,7 +397,7 @@ impl UserData for Entity {
             Ok(entity.animation.borrow().animation.to_string())
         });
         fields.add_field_method_set("animation_time", |lua, entity, time: f64|{
-            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on running server"))?;
             {
                 let mut animation = entity.animation.borrow_mut();
                 animation.begin_time = server.ticks_passed.get()-(time*Server::TPS as f64) as u32;
@@ -344,7 +406,7 @@ impl UserData for Entity {
             Ok(())
         });
         fields.add_field_method_get("animation_time", |lua, entity|{
-            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on running server"))?;
             Ok((server.ticks_passed.get()-entity.animation.borrow().begin_time) as f64/Server::TPS as f64)
         });
         fields.add_field_method_get("id", |lua, entity| {
@@ -356,7 +418,7 @@ impl UserData for Entity {
     }
     fn add_methods<'lua, M: UserDataMethods<'lua, Self>>(methods: &mut M) {
         methods.add_method("remove", |lua, entity, args: ()| {
-            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on running server"))?;
             server.entities.borrow_mut().remove(&entity.uuid);
             let position = entity.position.borrow().clone();
             let chunk = position.align_to_tile().to_chunk_position().0;
@@ -369,7 +431,7 @@ impl UserData for Entity {
             Ok(())
         });
         methods.add_method("get_collider", |lua, entity, name: String| {
-            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on running server"))?;
             let aabb = server.entity_registry.entities.get(&entity.type_id).unwrap().colliders.get::<ImmutableString>(&name.into()).unwrap().aabb;
             Ok(LuaAABB {
                 aabb: aabb.offset(&*entity.position.borrow()),
@@ -439,7 +501,7 @@ impl UserData for LuaAABB {
             Ok(table)
         });
         methods.add_method("test_collisions", |lua: &Lua, aabb, mask: u32| {
-            let mut server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            let mut server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on running server"))?;
             let mut collided = false;
             for entity in server.entities.borrow().values() {
                 let entity: std::cell::Ref<Entity> = entity.borrow().unwrap();
@@ -461,7 +523,7 @@ impl UserData for LuaAABB {
             if target_position.world != aabb.world {
                 return Err(Error::runtime("mismatched world"));
             }
-            let mut server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            let mut server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on running server"))?;
             let mut collision_time: f64 = 1.;
             for entity in server.entities.borrow().values() {
                 let entity: std::cell::Ref<Entity> = entity.borrow().unwrap();
@@ -592,17 +654,17 @@ impl Client {
 impl UserData for Client {
     fn add_methods<'lua, M: UserDataMethods<'lua, Self>>(methods: &mut M) {
         methods.add_function("set_camera_position", |lua, (client, pos): (OwnedAnyUserData, Position)| {
-            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on running server"))?;
             client.borrow_mut::<Client>().unwrap().set_camera(&server, client.clone(), ClientCameraType::Position(pos));
             Ok(())
         });
         methods.add_function("set_camera_entity", |lua, (client, entity): (OwnedAnyUserData, OwnedAnyUserData)| {
-            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on running server"))?;
             client.borrow_mut::<Client>().unwrap().set_camera(&server, client.clone(), ClientCameraType::Entity(entity));
             Ok(())
         });
         methods.add_function("remove_camera", |lua, client: OwnedAnyUserData| {
-            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on server is running"))?;
+            let server = lua.app_data_ref::<ServerPtr>().ok_or(Error::runtime("this method can only be used on running server"))?;
             client.borrow_mut::<Client>().unwrap().set_camera(&server, client.clone(), ClientCameraType::None);
             Ok(())
         });
