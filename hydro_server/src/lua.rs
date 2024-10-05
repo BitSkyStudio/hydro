@@ -256,7 +256,7 @@ impl UserData for Position {
                 world: pos.world.clone(),
             })
         });
-        methods.add_method("distance", |_, pos, other: Position|{
+        methods.add_method("dst", |_, pos, other: Position|{
             if pos.world != other.world{
                 return Err(Error::runtime(format!("mismatched world {}:{}", pos.world, other.world)));
             }
