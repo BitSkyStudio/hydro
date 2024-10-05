@@ -262,6 +262,16 @@ impl UserData for Position {
             }
             Ok(((pos.x-other.x).powi(2)+(pos.y-other.y).powi(2)).sqrt())
         });
+        methods.add_method("nor", |_, pos, _: ()|{
+            let length = (pos.x.powi(2) + pos.y.powi(2)).sqrt();
+            Ok(if length > 0. {Position{
+                x: pos.x / length,
+                y: pos.y / length,
+                world: pos.world.clone(),
+            }} else {
+                pos.clone()
+            })
+        });
         methods.add_method("add", |_, pos, other: Position|{
             if pos.world != other.world{
                 return Err(Error::runtime(format!("mismatched world {}:{}", pos.world, other.world)));
