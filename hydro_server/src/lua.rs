@@ -256,6 +256,39 @@ impl UserData for Position {
                 world: pos.world.clone(),
             })
         });
+        methods.add_method("distance", |_, pos, other: Position|{
+            if pos.world != other.world{
+                return Err(Error::runtime(format!("mismatched world {}:{}", pos.world, other.world)));
+            }
+            Ok(((pos.x-other.x).powi(2)+(pos.y-other.y).powi(2)).sqrt())
+        });
+        methods.add_method("add", |_, pos, other: Position|{
+            if pos.world != other.world{
+                return Err(Error::runtime(format!("mismatched world {}:{}", pos.world, other.world)));
+            }
+            Ok(Position{
+                x: pos.x + other.x,
+                y: pos.y + other.y,
+                world: pos.world.clone()
+            })
+        });
+        methods.add_method("sub", |_, pos, other: Position|{
+            if pos.world != other.world{
+                return Err(Error::runtime(format!("mismatched world {}:{}", pos.world, other.world)));
+            }
+            Ok(Position{
+                x: pos.x - other.x,
+                y: pos.y - other.y,
+                world: pos.world.clone()
+            })
+        });
+        methods.add_method("scl", |_, pos, scalar: f64|{
+            Ok(Position{
+                x: pos.x * scalar,
+                y: pos.y * scalar,
+                world: pos.world.clone()
+            })
+        });
     }
 }
 impl Position {
